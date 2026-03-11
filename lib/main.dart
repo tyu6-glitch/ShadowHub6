@@ -77,13 +77,14 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Future<void> _connectTcp() async {
-    if (isIosUsbMode) return; 
+    if (isIosUsbMode) return; // في وضع الـ USB نستخدم اتصال 8080 للأوامر
 
     _tcpSocket?.close();
     if (deviceIp.isEmpty) return;
     try {
       _tcpSocket = await Socket.connect(deviceIp, 8888, timeout: const Duration(seconds: 2));
       _tcpSocket?.setOption(SocketOption.tcpNoDelay, true);
+      debugPrint("✅ تم الاتصال ببورت التحكم 8888");
     } catch (e) {
       debugPrint("خطأ في اتصال TCP: $e");
     }
@@ -106,153 +107,88 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
-  Future<void> _startIosUsbServer() async {
-    try {
-      _serverSocket?.close();
-      _tcpSocket?.close();
-
-      _serverSocket = await ServerSocket.bind(InternetAddress.anyIPv4, 8080);
-      debugPrint("📱 الآيفون جاهز وينتظر اتصال الكمبيوتر عبر الـ USB على المنفذ 8080...");
-
-      _serverSocket!.listen((Socket socket) {
-        debugPrint("✅ تم اتصال الكمبيوتر بنجاح عبر الـ USB! 🚀");
-        
-        setState(() {
-          _tcpSocket = socket;
-          deviceIp = "127.0.0.1"; // سيتم تحديثه فور استلام رسالة الكمبيوتر
-          connectionStatus = "تم اتصال الكمبيوتر بالآيفون عبر الـ USB ✓";
-          statusColor = Colors.green;
-          isScanning = false;
-        });
-
-        // 🌟 التعديل هنا: الاستماع لآيبي الكمبيوتر
-        socket.listen(
-          (List<int> data) {
-            String message = utf8.decode(data).trim();
-            if (message.startsWith("PC_IP:")) {
-              setState(() {
-                deviceIp = message.split(":")[1]; 
-                debugPrint("🎯 تم استلام آيبي الكمبيوتر للبث: $deviceIp");
-              });
-              startMonitor(); 
-            }
-          },
-          onDone: () {
-            debugPrint("⚠️ انقطع الاتصال مع الكمبيوتر");
-            setState(() {
-              connectionStatus = "انقطع الاتصال عبر الـ USB ✗";
-              statusColor = Colors.red;
-              _tcpSocket = null;
-            });
-            socket.destroy();
-          },
-          onError: (error) {
-            debugPrint("❌ حدث خطأ في الاتصال: $error");
-            setState(() {
-              connectionStatus = "خطأ في الاتصال عبر الـ USB ✗";
-              statusColor = Colors.red;
-              _tcpSocket = null;
-            });
-            socket.destroy();
-          },
-        );
-      });
-    } catch (e) {
-      debugPrint("❌ فشل في فتح المنفذ: $e");
-      setState(() {
-        connectionStatus = "فشل تهيئة الآيفون للـ USB: $e";
-        statusColor = Colors.red;
-        isScanning = false;
-      });
-    }
-  }
-
+  // 🌟 الكود السحري الجديد للاتصال 🌟
   Future<void> autoDiscoverPC() async {
     setState(() {
       isScanning = true;
       deviceIp = ""; 
-    });
-
-    if (Platform.isIOS && !isWifiSelected) {
-      setState(() {
-        isIosUsbMode = true;
-        connectionStatus = "الآيفون جاهز: جاري انتظار الكمبيوتر عبر الـ USB ⏳...";
-        statusColor = Colors.orange;
-      });
-      await _startIosUsbServer();
-      return; 
-    }
-
-    setState(() {
-      isIosUsbMode = false;
-      connectionStatus = isWifiSelected 
-          ? "جاري البحث عبر شبكة الواي فاي 📶..." 
-          : "جاري الاتصال عبر كيبل الـ USB (ADB) 🔗...";
+      isIosUsbMode = !isWifiSelected;
+      String typeStr = isWifiSelected ? "الواي فاي 📶" : "كيبل الـ USB 🔗";
+      connectionStatus = "جاري انتظار الكمبيوتر عبر $typeStr ⏳...";
       statusColor = Colors.orange;
     });
 
-    String? foundIp;
+    try {
+      _serverSocket?.close();
+      _tcpSocket?.close();
 
-    if (!isWifiSelected) {
-      try {
-        final response = await http.get(Uri.parse('http://127.0.0.1:5000/get_stats')).timeout(const Duration(milliseconds: 1500));
-        if (response.statusCode == 200) foundIp = '127.0.0.1';
-      } catch (_) {}
-    }
+      // فتح الباب (8080) وانتظار رسالة البايثون
+      _serverSocket = await ServerSocket.bind(InternetAddress.anyIPv4, 8080);
+      debugPrint("📱 الجوال ينتظر اتصال الكمبيوتر على المنفذ 8080...");
 
-    if (foundIp == null) {
-      try {
-        final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4, includeLinkLocal: false);
-        for (var interface in interfaces) {
-          String name = interface.name.toLowerCase();
-          bool isWifi = name.startsWith('wlan') || name == 'en0' || name.startsWith('wifi');
-          bool isUsb = name.startsWith('rndis') || name.startsWith('usb') || name.startsWith('eth') || (name.startsWith('en') && name != 'en0') || name.startsWith('bridge');
+      bool connected = false;
 
-          if (isWifiSelected && !isWifi) continue; 
-          if (!isWifiSelected && !isUsb) continue; 
+      _serverSocket!.listen((Socket socket) {
+        socket.listen(
+          (List<int> data) async {
+            String message = utf8.decode(data).trim();
+            if (message.startsWith("PC_IP:")) {
+              connected = true;
+              String extractedIp = message.split(":")[1].trim();
+              
+              setState(() {
+                deviceIp = isWifiSelected ? extractedIp : "127.0.0.1";
+                String typeStr = isWifiSelected ? "الواي فاي 📶" : "كيبل الـ USB 🔗";
+                connectionStatus = "تم الاتصال بنجاح عبر $typeStr ✓";
+                statusColor = Colors.green;
+                isScanning = false;
+              });
 
-          for (var addr in interface.addresses) {
-            if (addr.address.startsWith('127.')) continue;
-            String myIp = addr.address;
-            String subnet = myIp.substring(0, myIp.lastIndexOf('.'));
-            
-            List<Future<void>> scanTasks = [];
-            for (int i = 1; i <= 255; i++) {
-              String targetIp = '$subnet.$i';
-              scanTasks.add(
-                http.get(Uri.parse('http://$targetIp:5000/get_stats'))
-                    .timeout(const Duration(milliseconds: 1500))
-                    .then((response) {
-                  if (response.statusCode == 200 && foundIp == null) {
-                    foundIp = targetIp; 
-                  }
-                }).catchError((_) {}) 
-              );
+              debugPrint("🎯 تم الاتصال! آيبي الكمبيوتر: $extractedIp");
+
+              if (isWifiSelected) {
+                // إذا كنا واي فاي، نغلق بورت الاستماع ونتصل ببورت 8888 للتحكم
+                _serverSocket?.close();
+                socket.destroy();
+                await _connectTcp();
+              } else {
+                // إذا كنا USB، نحتفظ بهذا الاتصال للأوامر (كما كان كودك القديم)
+                _tcpSocket = socket;
+              }
+
+              startMonitor(); 
             }
-            await Future.wait(scanTasks);
-            if (foundIp != null) break;
-          }
-          if (foundIp != null) break;
-        }
-      } catch (e) {
-        debugPrint("خطأ: $e");
-      }
-    }
-
-    if (foundIp != null) {
-      setState(() {
-        deviceIp = foundIp!;
-        String typeStr = isWifiSelected ? "الواي فاي 📶" : "كيبل الـ USB 🔗";
-        connectionStatus = "تم الاتصال بنجاح عبر $typeStr ✓";
-        statusColor = Colors.green;
-        isScanning = false;
+          },
+          onDone: () {
+            if (!isWifiSelected) {
+              setState(() {
+                connectionStatus = "انقطع الاتصال عبر الـ USB ✗";
+                statusColor = Colors.red;
+                _tcpSocket = null;
+              });
+            }
+          },
+          onError: (error) { debugPrint("خطأ: $error"); },
+        );
       });
-      startMonitor();
-      await _connectTcp();
-    } else {
+
+      // مهلة 15 ثانية وتتوقف الدائرة عن الدوران إن لم يتصل الكمبيوتر
+      Future.delayed(const Duration(seconds: 15), () {
+        if (isScanning && !connected) {
+          setState(() {
+            isScanning = false;
+            String typeStr = isWifiSelected ? "الواي فاي" : "كيبل الـ USB";
+            connectionStatus = "لم يتم العثور على الكمبيوتر عبر $typeStr ✗\nتأكد من فتح البرنامج في الكمبيوتر.";
+            statusColor = Colors.red;
+          });
+          _serverSocket?.close();
+        }
+      });
+
+    } catch (e) {
+      debugPrint("❌ فشل فتح المنفذ 8080: $e");
       setState(() {
-        String typeStr = isWifiSelected ? "الواي فاي" : "كيبل الـ USB";
-        connectionStatus = "لم يتم العثور على الكمبيوتر عبر $typeStr ✗\nتأكد من التوصيل والمحاولة مجدداً.";
+        connectionStatus = "فشل تهيئة الاتصال: $e";
         statusColor = Colors.red;
         isScanning = false;
       });
@@ -261,7 +197,7 @@ class _MainScreenState extends State<MainScreen> {
 
   void startMonitor() {
     _monitorTimer?.cancel();
-    if (deviceIp.isEmpty) return; // 🌟 تم إزالة isIosUsbMode ليعمل على الآيفون
+    if (deviceIp.isEmpty) return; 
 
     _monitorTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
       try {
@@ -282,7 +218,7 @@ class _MainScreenState extends State<MainScreen> {
   void stopMonitor() => _monitorTimer?.cancel();
 
   Future<void> syncApps() async {
-    if (deviceIp.isEmpty) return; // 🌟 تم إزالة isIosUsbMode لتعمل المزامنة
+    if (deviceIp.isEmpty) return; 
     setState(() => isSyncing = true);
     try {
       sendCommand("SYNC");
