@@ -54,19 +54,19 @@ class _MainScreenState extends State<MainScreen> {
   Timer? _monitorTimer;
   bool isSyncing = false;
 
-  // ==========================================
-  // متغيرات الاتصال والفيديو المدمجة
-  // ==========================================
-  Socket? _tcpSocket; 
-  ServerSocket? _serverSocket; // للـ USB
-  bool isIosUsbMode = false; 
-
-  // خاص بفيديو الـ USB (TCP Push)
-  ServerSocket? _videoServerSocket; 
-  Socket? _videoSocket;
+  // مسار الاتصال المزدوج
+  Socket? _wifiCmdSocket; 
+  
+  // مسار الـ USB (سيرفرات)
+  ServerSocket? _usbCmdServer;
+  Socket? _usbActiveCmdSocket;
+  ServerSocket? _usbVideoServer;
+  Socket? _usbActiveVideoSocket;
+  
   Uint8List? _currentFrame;
   final BytesBuilder _videoBuffer = BytesBuilder();
   int _expectedFrameSize = 0;
+  bool isIosUsbMode = false; 
 
   double floatingX = 20.0;
   double floatingY = 100.0;
@@ -77,169 +77,119 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void dispose() {
     _monitorTimer?.cancel();
-    _tcpSocket?.close(); 
-    _serverSocket?.close();
-    _stopVideoStream();
+    _wifiCmdSocket?.close(); 
+    _usbCmdServer?.close();
+    _stopUsbVideoStream();
     super.dispose();
   }
 
   // ==========================================
-  // 1. الاتصال والأوامر (Wi-Fi & USB)
+  // 1. نظام إرسال الأوامر الموحد
   // ==========================================
-  Future<void> _connectTcp() async {
-    if (isIosUsbMode) return; // الـ USB له نظامه الخاص
-    _tcpSocket?.close();
-    if (deviceIp.isEmpty) return;
-    try {
-      _tcpSocket = await Socket.connect(deviceIp, 8888, timeout: const Duration(seconds: 2));
-      _tcpSocket?.setOption(SocketOption.tcpNoDelay, true);
-    } catch (e) {
-      debugPrint("TCP Error: $e");
-    }
-  }
-
   void sendCommand(String command) {
-    if (_tcpSocket != null) {
-      try { _tcpSocket!.write("$command\n"); } catch (e) { if (!isIosUsbMode) _connectTcp(); }
+    if (isIosUsbMode) {
+      if (_usbActiveCmdSocket != null) {
+        try { _usbActiveCmdSocket!.write("$command\n"); } catch (e) {}
+      }
     } else {
-      if (!isIosUsbMode) _connectTcp().then((_) => _tcpSocket?.write("$command\n"));
-    }
-  }
-
-  // ==========================================
-  // 2. نظام الاكتشاف الهجين (السر هنا)
-  // ==========================================
-  
-  // أ. خادم الـ USB (الآيباد ينتظر الكمبيوتر)
-  Future<void> _startIosUsbServer() async {
-    try {
-      _serverSocket?.close();
-      _tcpSocket?.close();
-
-      _serverSocket = await ServerSocket.bind(InternetAddress.anyIPv4, 8080);
-      debugPrint("📱 وضع الـ USB: الآيباد ينتظر دخول الكمبيوتر...");
-
-      _serverSocket!.listen((Socket socket) {
-        debugPrint("✅ تم ربط نفق الـ USB بنجاح!");
-        setState(() {
-          deviceIp = "127.0.0.1"; 
-          _tcpSocket = socket; 
-          connectionStatus = "تم الاتصال الخارق عبر سلك الـ USB ✓";
-          statusColor = Colors.green;
-          isScanning = false;
-        });
-
-        socket.listen(
-          (List<int> data) {},
-          onDone: () {
-            if (mounted) {
-              setState(() {
-                connectionStatus = "تم فصل سلك الـ USB ✗";
-                statusColor = Colors.red;
-                _tcpSocket = null;
-                _stopVideoStream();
-              });
-            }
-          },
-          onError: (e) { _tcpSocket = null; _stopVideoStream(); },
-        );
-      });
-    } catch (e) {
-      setState(() {
-        connectionStatus = "فشل فتح منفذ الـ USB: $e";
-        statusColor = Colors.red;
-        isScanning = false;
-      });
-    }
-  }
-
-  Future<void> autoDiscoverPC() async {
-    setState(() { isScanning = true; deviceIp = ""; });
-
-    if (!isWifiSelected) {
-      // تشغيل نظام الـ USB القديم القوي
-      setState(() {
-        isIosUsbMode = true;
-        connectionStatus = "جاري بناء النفق عبر السلك ⏳...\n(يرجى التأكد من البرنامج في الكمبيوتر)";
-        statusColor = Colors.orange;
-      });
-      await _startIosUsbServer();
-    } else {
-      // تشغيل نظام الواي فاي (الرادار)
-      setState(() {
-        isIosUsbMode = false;
-        connectionStatus = "جاري استماع الرادار عبر الواي فاي 📶...";
-        statusColor = Colors.orange;
-      });
-      try {
-        RawDatagramSocket udpSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 5555);
-        udpSocket.listen((RawSocketEvent event) {
-          if (event == RawSocketEvent.read) {
-            Datagram? dg = udpSocket.receive();
-            if (dg != null) {
-              String msg = utf8.decode(dg.data).trim();
-              if (msg.contains("PC_SERVER_HERE")) {
-                if (deviceIp.isEmpty && mounted) {
-                  _onDeviceFound(dg.address.address, "الواي فاي 📶");
-                  udpSocket.close();
-                }
-              }
-            }
-          }
-        });
-        await Future.delayed(const Duration(seconds: 3));
-        udpSocket.close();
-      } catch (e) {}
-
-      if (deviceIp.isEmpty && mounted) {
-        setState(() {
-          connectionStatus = "لم يتم العثور على الكمبيوتر ✗";
-          statusColor = Colors.red;
-          isScanning = false;
-        });
+      if (_wifiCmdSocket != null) {
+        try { _wifiCmdSocket!.write("$command\n"); } catch (e) { _connectWifiCmd(); }
       }
     }
   }
 
-  void _onDeviceFound(String ip, String type) async {
-    setState(() {
-      deviceIp = ip;
-      connectionStatus = "تم الاتصال بنجاح عبر $type ✓";
-      statusColor = Colors.green;
-      isScanning = false;
-    });
-    startMonitor();
-    await _connectTcp();
+  // ==========================================
+  // 2. هندسة اتصال الواي فاي (الآيباد هو العميل)
+  // ==========================================
+  Future<void> _connectWifiCmd() async {
+    _wifiCmdSocket?.close();
+    if (deviceIp.isEmpty) return;
+    try {
+      _wifiCmdSocket = await Socket.connect(deviceIp, 8888, timeout: const Duration(seconds: 2));
+      _wifiCmdSocket?.setOption(SocketOption.tcpNoDelay, true);
+    } catch (e) {}
+  }
+
+  Future<void> _startWifiDiscovery() async {
+    try {
+      RawDatagramSocket udpSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+      udpSocket.broadcastEnabled = true;
+      udpSocket.listen((RawSocketEvent event) {
+        if (event == RawSocketEvent.read) {
+          Datagram? dg = udpSocket.receive();
+          if (dg != null) {
+            String msg = utf8.decode(dg.data).trim();
+            if (msg.contains("SHADOWHUB_PC")) {
+              String ip = msg.split(":")[1];
+              if (deviceIp.isEmpty && mounted) {
+                setState(() {
+                  deviceIp = ip;
+                  connectionStatus = "متصل عبر الواي فاي 📶";
+                  statusColor = Colors.green;
+                  isScanning = false;
+                });
+                startMonitor();
+                _connectWifiCmd();
+                udpSocket.close();
+              }
+            }
+          }
+        }
+      });
+      udpSocket.send(utf8.encode("SHADOWHUB_IPAD"), InternetAddress("255.255.255.255"), 5555);
+      await Future.delayed(const Duration(seconds: 3));
+      udpSocket.close();
+    } catch (e) {}
+
+    if (deviceIp.isEmpty && mounted) {
+      setState(() { connectionStatus = "لم يتم العثور على الكمبيوتر ✗"; statusColor = Colors.red; isScanning = false; });
+    }
   }
 
   // ==========================================
-  // 3. نظام فيديو الـ USB (TCP Push)
+  // 3. هندسة اتصال الـ USB (الآيباد هو السيرفر)
   // ==========================================
-  Future<void> _startUsbVideoStream() async {
-    _stopVideoStream(); 
+  Future<void> _startUsbServers() async {
     try {
-      _videoServerSocket = await ServerSocket.bind(InternetAddress.anyIPv4, 5001);
-      _videoServerSocket!.listen((Socket socket) {
-        _videoSocket = socket;
-        socket.listen(
-          (Uint8List data) {
-            _videoBuffer.add(data);
-            _processVideoBuffer();
-          },
-          onDone: () => _stopVideoStream(),
-          onError: (e) => _stopVideoStream(),
-        );
+      _usbCmdServer?.close();
+      _usbCmdServer = await ServerSocket.bind(InternetAddress.anyIPv4, 8080);
+      _usbCmdServer!.listen((Socket socket) {
+        setState(() {
+          isIosUsbMode = true;
+          deviceIp = "127.0.0.1";
+          _usbActiveCmdSocket = socket;
+          connectionStatus = "متصل عبر سلك الـ USB الخارق 🚀";
+          statusColor = Colors.green;
+          isScanning = false;
+        });
+        socket.listen((data) {}, onDone: _onUsbDisconnect, onError: (e) => _onUsbDisconnect());
+      });
+
+      _usbVideoServer?.close();
+      _usbVideoServer = await ServerSocket.bind(InternetAddress.anyIPv4, 5001);
+      _usbVideoServer!.listen((Socket socket) {
+        _usbActiveVideoSocket = socket;
+        socket.listen((Uint8List data) {
+          _videoBuffer.add(data);
+          _processVideoBuffer();
+        }, onDone: _stopUsbVideoStream, onError: (e) => _stopUsbVideoStream());
       });
     } catch (e) {
-      debugPrint("[X] فشل فتح سيرفر الفيديو: $e");
+      setState(() { connectionStatus = "خطأ في سيرفرات الـ USB: $e"; statusColor = Colors.red; isScanning = false; });
     }
+  }
+
+  void _onUsbDisconnect() {
+    if (mounted) {
+      setState(() { connectionStatus = "تم فصل سلك الـ USB ✗"; statusColor = Colors.red; _usbActiveCmdSocket = null; });
+    }
+    _stopUsbVideoStream();
   }
 
   void _processVideoBuffer() {
     var bytes = _videoBuffer.takeBytes(); 
     int offset = 0;
     Uint8List? latestFrame; 
-
     while (true) {
       if (_expectedFrameSize == 0 && (bytes.length - offset) >= 4) {
         _expectedFrameSize = ByteData.sublistView(bytes, offset, offset + 4).getUint32(0, Endian.big);
@@ -249,47 +199,48 @@ class _MainScreenState extends State<MainScreen> {
         latestFrame = bytes.sublist(offset, offset + _expectedFrameSize);
         offset += _expectedFrameSize;
         _expectedFrameSize = 0; 
-      } else {
-        break; 
-      }
+      } else { break; }
     }
-
     if (latestFrame != null && mounted && isMonitorMode) {
       setState(() { _currentFrame = latestFrame; });
     }
-    if (offset < bytes.length) {
-      _videoBuffer.add(bytes.sublist(offset));
-    }
+    if (offset < bytes.length) _videoBuffer.add(bytes.sublist(offset));
   }
 
-  void _stopVideoStream() {
-    _videoSocket?.close();
-    _videoServerSocket?.close();
-    _videoSocket = null;
-    _videoServerSocket = null;
+  void _stopUsbVideoStream() {
+    _usbActiveVideoSocket?.close();
+    _usbActiveVideoSocket = null;
     _videoBuffer.clear();
     _expectedFrameSize = 0;
     if (mounted) setState(() { _currentFrame = null; });
   }
 
   // ==========================================
-  // 4. مراقب النظام والمزامنة
+  // الواجهة الرئيسية
   // ==========================================
+  Future<void> autoDiscoverPC() async {
+    setState(() { isScanning = true; deviceIp = ""; });
+    if (!isWifiSelected) {
+      setState(() { connectionStatus = "جاري بناء النفق عبر السلك ⏳..."; statusColor = Colors.orange; });
+      await _startUsbServers();
+    } else {
+      setState(() { connectionStatus = "جاري البحث بالرادار 📶..."; statusColor = Colors.orange; });
+      await _startWifiDiscovery();
+    }
+  }
+
   void startMonitor() {
     _monitorTimer?.cancel();
-    if (deviceIp.isEmpty || isIosUsbMode) return; // نوقف مراقب HTTP في سلك الـ USB
-
+    if (deviceIp.isEmpty || isIosUsbMode) return; 
     _monitorTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
       try {
-        final response = await http.get(Uri.parse('http://$deviceIp:5000/get_stats')).timeout(const Duration(seconds: 1));
-        if (response.statusCode == 200) {
-          final data = json.decode(response.body);
-          if (mounted) {
-            setState(() {
-              cpuUsage = (double.tryParse(data['cpu']?.toString() ?? '0') ?? 0.0).toStringAsFixed(1);
-              ramUsage = (double.tryParse(data['ram']?.toString() ?? '0') ?? 0.0).toStringAsFixed(1);
-            });
-          }
+        final res = await http.get(Uri.parse('http://$deviceIp:5000/get_stats')).timeout(const Duration(seconds: 1));
+        if (res.statusCode == 200) {
+          final data = json.decode(res.body);
+          if (mounted) setState(() {
+            cpuUsage = (double.tryParse(data['cpu']?.toString() ?? '0') ?? 0.0).toStringAsFixed(1);
+            ramUsage = (double.tryParse(data['ram']?.toString() ?? '0') ?? 0.0).toStringAsFixed(1);
+          });
         }
       } catch (e) {}
     });
@@ -298,22 +249,15 @@ class _MainScreenState extends State<MainScreen> {
   void stopMonitor() => _monitorTimer?.cancel();
 
   Future<void> syncApps() async {
-    if (isIosUsbMode) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("الرجاء استخدام الواي فاي لمرة واحدة لمزامنة التطبيقات.")));
-      }
-      return;
-    }
+    if (isIosUsbMode) return;
     if (deviceIp.isEmpty) return; 
     setState(() => isSyncing = true);
     try {
       sendCommand("SYNC");
       await Future.delayed(const Duration(milliseconds: 1000));
-      String url = 'http://$deviceIp:5000/get_all_data?t=${DateTime.now().millisecondsSinceEpoch}';
-      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 15)); 
-
-      if (response.statusCode == 200) {
-        final data = json.decode(utf8.decode(response.bodyBytes));
+      final res = await http.get(Uri.parse('http://$deviceIp:5000/get_all_data')).timeout(const Duration(seconds: 15)); 
+      if (res.statusCode == 200) {
+        final data = json.decode(utf8.decode(res.bodyBytes));
         String appsRaw = data['apps_raw'] ?? "";
         List<dynamic> icons = data['icons'] ?? [];
         if (appsRaw.isNotEmpty) {
@@ -335,32 +279,19 @@ class _MainScreenState extends State<MainScreen> {
           if (mounted) setState(() => customApps = fetchedApps);
         }
       }
-    } catch (e) {
-      debugPrint("Sync Error: $e");
-    } finally {
-      if (mounted) setState(() => isSyncing = false);
-    }
+    } catch (e) {} finally { if (mounted) setState(() => isSyncing = false); }
   }
 
   void _exitFullScreenMode() {
     setState(() {
-      if (isMonitorMode) {
-        floatingX = savedPortraitX;
-        floatingY = savedPortraitY;
-      }
-      isStreamDeckMode = false;
-      isMonitorMode = false;
-      _currentIndex = 4; 
+      if (isMonitorMode) { floatingX = savedPortraitX; floatingY = savedPortraitY; }
+      isStreamDeckMode = false; isMonitorMode = false; _currentIndex = 4; 
     });
-    _stopVideoStream();
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     startMonitor();
   }
 
-  // ==========================================
-  // 5. بناء واجهة المستخدم
-  // ==========================================
   @override
   Widget build(BuildContext context) {
     double keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
@@ -376,8 +307,7 @@ class _MainScreenState extends State<MainScreen> {
 
     if (isMonitorMode) {
       activeScreen = Scaffold(
-        resizeToAvoidBottomInset: false, 
-        backgroundColor: Colors.black,
+        resizeToAvoidBottomInset: false, backgroundColor: Colors.black,
         body: SafeArea(
           left: false, right: false, top: false, bottom: false,
           child: Stack(
@@ -385,57 +315,39 @@ class _MainScreenState extends State<MainScreen> {
               Center(
                 child: deviceIp.isEmpty 
                     ? const Text("الرجاء الاتصال بالكمبيوتر أولاً", style: TextStyle(color: Colors.white54, fontSize: 16))
-                    // 🔥 هنا السحر: إذا كان USB يقرأ بايتات، إذا كان واي فاي يقرأ Mjpeg 🔥
+                    // 🔥 السحر الهجين في عرض الفيديو 🔥
                     : (isIosUsbMode
                         ? (_currentFrame == null
-                            ? const Text("جاري التقاط بث الـ USB السريع...", style: TextStyle(color: Colors.white54, fontSize: 16))
+                            ? const Text("جاري التقاط بث الـ USB الخارق...", style: TextStyle(color: Colors.white54, fontSize: 16))
                             : Image.memory(_currentFrame!, fit: BoxFit.contain, gaplessPlayback: true))
                         : Mjpeg(
                             isLive: true,
                             stream: 'http://$deviceIp:5000/video_feed',
                             fit: BoxFit.contain,
-                            error: (context, error, stack) => const Text("فشل تحميل البث", style: TextStyle(color: Colors.red)),
+                            error: (context, error, stack) => const Text("فشل تحميل بث الواي فاي", style: TextStyle(color: Colors.red)),
                           )),
               ),
-              Positioned(
-                top: 20, left: 20,
-                child: Container(
-                  decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(50)),
-                  child: IconButton(
-                    icon: const Icon(Icons.arrow_back, color: Colors.white, size: 30),
-                    onPressed: _exitFullScreenMode,
-                  ),
-                ),
-              ),
+              Positioned(top: 20, left: 20, child: Container(decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(50)), child: IconButton(icon: const Icon(Icons.arrow_back, color: Colors.white, size: 30), onPressed: _exitFullScreenMode))),
             ],
           ),
         ),
       );
     } else if (isStreamDeckMode) {
       activeScreen = Scaffold(
-        resizeToAvoidBottomInset: false, 
-        backgroundColor: Colors.black, 
+        resizeToAvoidBottomInset: false, backgroundColor: Colors.black, 
         body: SafeArea(
           child: Stack(
             children: [
               GridView.builder(
                 padding: const EdgeInsets.only(top: 80, left: 20, right: 20, bottom: 20),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 4, mainAxisSpacing: 15, crossAxisSpacing: 15
-                ),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 4, mainAxisSpacing: 15, crossAxisSpacing: 15),
                 itemCount: customApps.length,
                 itemBuilder: (context, index) {
                   var app = customApps[index];
                   return _buildAppItem(app['name']!, app['icon']!, "LAUNCH:${app['index']}");
                 },
               ),
-              Positioned(
-                top: 10, left: 10,
-                child: Container(
-                  decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(50)),
-                  child: IconButton(icon: const Icon(Icons.arrow_back, color: Colors.white, size: 30), onPressed: _exitFullScreenMode),
-                ),
-              ),
+              Positioned(top: 10, left: 10, child: Container(decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(50)), child: IconButton(icon: const Icon(Icons.arrow_back, color: Colors.white, size: 30), onPressed: _exitFullScreenMode))),
             ],
           ),
         ),
@@ -443,50 +355,28 @@ class _MainScreenState extends State<MainScreen> {
     } else {
       activeScreen = Scaffold(
         resizeToAvoidBottomInset: false, 
-        appBar: AppBar(
-          backgroundColor: const Color(0xFF15161E),
-          title: const Text('ShadowHub', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-          centerTitle: true,
-        ),
-        body: IndexedStack(
-          index: _currentIndex,
-          children: [const SizedBox(), _buildMediaScreen(), _buildMouseScreen(), const SizedBox(), _buildSettingsScreen()],
-        ),
+        appBar: AppBar(backgroundColor: const Color(0xFF15161E), title: const Text('ShadowHub', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), centerTitle: true),
+        body: IndexedStack(index: _currentIndex, children: [const SizedBox(), _buildMediaScreen(), _buildMouseScreen(), const SizedBox(), _buildSettingsScreen()]),
         bottomNavigationBar: BottomNavigationBar(
-          backgroundColor: const Color(0xFF15161E),
-          selectedItemColor: const Color(0xFFB829EA), 
-          unselectedItemColor: const Color(0xFF888B94),
-          type: BottomNavigationBarType.fixed, 
-          currentIndex: _currentIndex,
+          backgroundColor: const Color(0xFF15161E), selectedItemColor: const Color(0xFFB829EA), unselectedItemColor: const Color(0xFF888B94), type: BottomNavigationBarType.fixed, currentIndex: _currentIndex,
           onTap: (index) {
             if (index == 0) {
               setState(() => isStreamDeckMode = true);
               SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
               stopMonitor(); 
             } else if (index == 3) {
-              setState(() {
-                isMonitorMode = true;
-                savedPortraitX = floatingX;
-                savedPortraitY = floatingY;
-                floatingX = 20.0; floatingY = 180.0; 
-              });
+              setState(() { isMonitorMode = true; savedPortraitX = floatingX; savedPortraitY = floatingY; floatingX = 20.0; floatingY = 180.0; });
               SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
               SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
               stopMonitor();
-              
-              // تشغيل خادم الفيديو إذا كان الوضع USB
-              if (isIosUsbMode) _startUsbVideoStream();
-              
             } else {
               setState(() => _currentIndex = index);
               index == 4 ? startMonitor() : stopMonitor(); 
             }
           },
           items: const [
-            BottomNavigationBarItem(icon: Icon(Icons.apps), label: 'StreamDeck'),
-            BottomNavigationBarItem(icon: Icon(Icons.music_note), label: 'الميديا'),
-            BottomNavigationBarItem(icon: Icon(Icons.mouse), label: 'الماوس'),
-            BottomNavigationBarItem(icon: Icon(Icons.monitor), label: 'الشاشة'),
+            BottomNavigationBarItem(icon: Icon(Icons.apps), label: 'StreamDeck'), BottomNavigationBarItem(icon: Icon(Icons.music_note), label: 'الميديا'),
+            BottomNavigationBarItem(icon: Icon(Icons.mouse), label: 'الماوس'), BottomNavigationBarItem(icon: Icon(Icons.monitor), label: 'الشاشة'),
             BottomNavigationBarItem(icon: Icon(Icons.settings), label: 'الإعدادات'),
           ],
         ),
@@ -499,13 +389,9 @@ class _MainScreenState extends State<MainScreen> {
         children: [
           GestureDetector(
             onTap: () {
-              if (isKeyboardOpen || _keyboardFocus.hasFocus) {
-                FocusManager.instance.primaryFocus?.unfocus();
-                SystemChannels.textInput.invokeMethod('TextInput.hide');
-              }
+              if (isKeyboardOpen || _keyboardFocus.hasFocus) { FocusManager.instance.primaryFocus?.unfocus(); SystemChannels.textInput.invokeMethod('TextInput.hide'); }
             },
-            behavior: HitTestBehavior.translucent,
-            child: activeScreen,
+            behavior: HitTestBehavior.translucent, child: activeScreen,
           ),
           Positioned(
             top: 0, left: 0,
@@ -514,11 +400,7 @@ class _MainScreenState extends State<MainScreen> {
               child: SizedBox(
                 width: 1, height: 1,
                 child: TextField(
-                  controller: _keyboardController,
-                  focusNode: _keyboardFocus,
-                  autocorrect: false, enableSuggestions: false,
-                  keyboardType: TextInputType.multiline, 
-                  maxLines: null,
+                  controller: _keyboardController, focusNode: _keyboardFocus, autocorrect: false, enableSuggestions: false, keyboardType: TextInputType.multiline, maxLines: null,
                   onChanged: (text) {
                     if (text.isNotEmpty && text.length > _lastText.length) {
                       String newChars = text.substring(_lastText.length);
@@ -542,18 +424,11 @@ class _MainScreenState extends State<MainScreen> {
             child: GestureDetector(
               onPanUpdate: (details) { setState(() { floatingX += details.delta.dx; floatingY += details.delta.dy; }); },
               onTap: () {
-                if (isKeyboardOpen || _keyboardFocus.hasFocus) {
-                  _keyboardFocus.unfocus(); SystemChannels.textInput.invokeMethod('TextInput.hide');
-                } else {
-                  _keyboardFocus.requestFocus(); SystemChannels.textInput.invokeMethod('TextInput.show');
-                }
+                if (isKeyboardOpen || _keyboardFocus.hasFocus) { _keyboardFocus.unfocus(); SystemChannels.textInput.invokeMethod('TextInput.hide'); } 
+                else { _keyboardFocus.requestFocus(); SystemChannels.textInput.invokeMethod('TextInput.show'); }
                 HapticFeedback.lightImpact();
               },
-              child: Container(
-                padding: const EdgeInsets.all(15),
-                decoration: BoxDecoration(color: Colors.white.withOpacity(0.5), shape: BoxShape.circle, boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 4))]),
-                child: const Icon(Icons.keyboard, color: Colors.black, size: 30), 
-              ),
+              child: Container(padding: const EdgeInsets.all(15), decoration: BoxDecoration(color: Colors.white.withOpacity(0.5), shape: BoxShape.circle, boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 4))]), child: const Icon(Icons.keyboard, color: Colors.black, size: 30)),
             ),
           ),
         ],
@@ -568,35 +443,15 @@ class _MainScreenState extends State<MainScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.3))),
+            padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.3))),
             child: Column(
               children: [
-                const Text("طريقة الاتصال", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
-                const SizedBox(height: 15),
+                const Text("طريقة الاتصال", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)), const SizedBox(height: 15),
                 Row(
                   children: [
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: () => setState(() => isWifiSelected = true),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(vertical: 15),
-                          decoration: BoxDecoration(color: isWifiSelected ? const Color(0xFFB829EA) : const Color(0xFF0B0C10), borderRadius: BorderRadius.circular(10), border: Border.all(color: isWifiSelected ? const Color(0xFFB829EA) : Colors.grey.shade800)),
-                          child: Column(children: [Icon(Icons.wifi, color: isWifiSelected ? Colors.white : Colors.grey), const SizedBox(height: 5), Text("واي فاي", style: TextStyle(color: isWifiSelected ? Colors.white : Colors.grey, fontWeight: FontWeight.bold))]),
-                        ),
-                      ),
-                    ),
+                    Expanded(child: GestureDetector(onTap: () => setState(() => isWifiSelected = true), child: Container(padding: const EdgeInsets.symmetric(vertical: 15), decoration: BoxDecoration(color: isWifiSelected ? const Color(0xFFB829EA) : const Color(0xFF0B0C10), borderRadius: BorderRadius.circular(10), border: Border.all(color: isWifiSelected ? const Color(0xFFB829EA) : Colors.grey.shade800)), child: Column(children: [Icon(Icons.wifi, color: isWifiSelected ? Colors.white : Colors.grey), const SizedBox(height: 5), Text("واي فاي", style: TextStyle(color: isWifiSelected ? Colors.white : Colors.grey, fontWeight: FontWeight.bold))])))),
                     const SizedBox(width: 15),
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: () => setState(() => isWifiSelected = false),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(vertical: 15),
-                          decoration: BoxDecoration(color: !isWifiSelected ? const Color(0xFFB829EA) : const Color(0xFF0B0C10), borderRadius: BorderRadius.circular(10), border: Border.all(color: !isWifiSelected ? const Color(0xFFB829EA) : Colors.grey.shade800)),
-                          child: Column(children: [Icon(Icons.usb, color: !isWifiSelected ? Colors.white : Colors.grey), const SizedBox(height: 5), Text("كيبل USB", style: TextStyle(color: !isWifiSelected ? Colors.white : Colors.grey, fontWeight: FontWeight.bold))]),
-                        ),
-                      ),
-                    ),
+                    Expanded(child: GestureDetector(onTap: () => setState(() => isWifiSelected = false), child: Container(padding: const EdgeInsets.symmetric(vertical: 15), decoration: BoxDecoration(color: !isWifiSelected ? const Color(0xFFB829EA) : const Color(0xFF0B0C10), borderRadius: BorderRadius.circular(10), border: Border.all(color: !isWifiSelected ? const Color(0xFFB829EA) : Colors.grey.shade800)), child: Column(children: [Icon(Icons.usb, color: !isWifiSelected ? Colors.white : Colors.grey), const SizedBox(height: 5), Text("كيبل USB", style: TextStyle(color: !isWifiSelected ? Colors.white : Colors.grey, fontWeight: FontWeight.bold))])))),
                   ],
                 ),
                 const SizedBox(height: 20),
@@ -612,15 +467,8 @@ class _MainScreenState extends State<MainScreen> {
           const SizedBox(height: 15),
           Center(child: Text(connectionStatus, textAlign: TextAlign.center, style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 14))),
           const Divider(height: 40, color: Colors.grey),
-          const Text("مراقب النظام (Live)", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
-          const SizedBox(height: 15),
-          Row(
-            children: [
-              Expanded(child: _buildMonitorCard("المعالج (CPU)", "$cpuUsage%", Icons.memory, Colors.blue)),
-              const SizedBox(width: 15),
-              Expanded(child: _buildMonitorCard("الرام (RAM)", "$ramUsage%", Icons.storage, Colors.green)),
-            ],
-          ),
+          const Text("مراقب النظام (Live)", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)), const SizedBox(height: 15),
+          Row(children: [Expanded(child: _buildMonitorCard("المعالج (CPU)", "$cpuUsage%", Icons.memory, Colors.blue)), const SizedBox(width: 15), Expanded(child: _buildMonitorCard("الرام (RAM)", "$ramUsage%", Icons.storage, Colors.green))]),
           const Divider(height: 40, color: Colors.grey),
           ElevatedButton.icon(
             onPressed: syncApps,
@@ -634,95 +482,42 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Widget _buildMonitorCard(String title, String value, IconData icon, Color color) {
-    return Container(
-      padding: const EdgeInsets.all(15), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15)),
-      child: Column(children: [Icon(icon, color: color, size: 40), const SizedBox(height: 10), Text(title, style: const TextStyle(color: Colors.grey, fontSize: 12)), Text(value, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold))]),
-    );
+    return Container(padding: const EdgeInsets.all(15), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15)), child: Column(children: [Icon(icon, color: color, size: 40), const SizedBox(height: 10), Text(title, style: const TextStyle(color: Colors.grey, fontSize: 12)), Text(value, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold))]));
   }
 
   Widget _buildAppItem(String name, String iconBase64, String cmd) {
     return GestureDetector(
       onTap: () { sendCommand(cmd); HapticFeedback.lightImpact(); },
-      child: Container(
-        decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFF333333))),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            _buildSafeIcon(iconBase64), const SizedBox(height: 5), Text(name, style: const TextStyle(fontSize: 11), textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis),
-          ],
-        ),
-      ),
+      child: Container(decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFF333333))), child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [_buildSafeIcon(iconBase64), const SizedBox(height: 5), Text(name, style: const TextStyle(fontSize: 11), textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis)])),
     );
   }
 
   Widget _buildSafeIcon(String base64Str) {
     if (base64Str.isEmpty) return const Icon(Icons.apps, size: 45);
-    try {
-      return Image.memory(base64Decode(base64Str), width: 45, height: 45, errorBuilder: (context, error, stackTrace) => const Icon(Icons.broken_image, size: 45, color: Colors.grey));
-    } catch (e) { return const Icon(Icons.warning_amber_rounded, size: 45, color: Colors.orange); }
+    try { return Image.memory(base64Decode(base64Str), width: 45, height: 45, errorBuilder: (context, error, stackTrace) => const Icon(Icons.broken_image, size: 45, color: Colors.grey)); } 
+    catch (e) { return const Icon(Icons.warning_amber_rounded, size: 45, color: Colors.orange); }
   }
 
   Widget _buildMediaScreen() {
-    return GridView.count(
-      crossAxisCount: 2, padding: const EdgeInsets.all(20), mainAxisSpacing: 20, crossAxisSpacing: 20,
-      children: [
-        _buildMediaBtn('رفع الصوت', Icons.volume_up, 'VOL_UP'), _buildMediaBtn('خفض الصوت', Icons.volume_down, 'VOL_DOWN'), _buildMediaBtn('كتم', Icons.volume_off, 'VOL_MUTE'),
-        _buildMediaBtn('إيقاف / تشغيل', Icons.play_arrow, 'MEDIA_PLAY_PAUSE'), _buildMediaBtn('المقطع التالي', Icons.skip_next, 'MEDIA_NEXT'), _buildMediaBtn('الم অ্যাকطع السابق', Icons.skip_previous, 'MEDIA_PREV'),
-      ],
-    );
+    return GridView.count(crossAxisCount: 2, padding: const EdgeInsets.all(20), mainAxisSpacing: 20, crossAxisSpacing: 20, children: [_buildMediaBtn('رفع الصوت', Icons.volume_up, 'VOL_UP'), _buildMediaBtn('خفض الصوت', Icons.volume_down, 'VOL_DOWN'), _buildMediaBtn('كتم', Icons.volume_off, 'VOL_MUTE'), _buildMediaBtn('إيقاف / تشغيل', Icons.play_arrow, 'MEDIA_PLAY_PAUSE'), _buildMediaBtn('المقطع التالي', Icons.skip_next, 'MEDIA_NEXT'), _buildMediaBtn('المقطع السابق', Icons.skip_previous, 'MEDIA_PREV')]);
   }
 
   Widget _buildMediaBtn(String t, IconData i, String c) {
-    return GestureDetector(
-      onTap: () { sendCommand(c); HapticFeedback.lightImpact(); },
-      child: Container(decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15)), child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(i, size: 40), Text(t)])),
-    );
+    return GestureDetector(onTap: () { sendCommand(c); HapticFeedback.lightImpact(); }, child: Container(decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15)), child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(i, size: 40), Text(t)])));
   }
 
   Widget _buildMouseScreen() {
     return Column(
       children: [
-        Expanded(
-          child: GestureDetector(
-            onPanStart: (details) => _lastTouchPosition = details.localPosition,
-            onPanUpdate: (details) {
-              if (_lastTouchPosition != null) {
-                double dx = details.localPosition.dx - _lastTouchPosition!.dx;
-                double dy = details.localPosition.dy - _lastTouchPosition!.dy;
-                _lastTouchPosition = details.localPosition;
-                sendCommand('M_MOVE:${dx.toStringAsFixed(1)}:${dy.toStringAsFixed(1)}');
-              }
-            },
-            onPanEnd: (details) => _lastTouchPosition = null,
-            onTap: () { sendCommand('M_CLICK'); HapticFeedback.selectionClick(); },
-            onDoubleTap: () { sendCommand('M_DCLICK'); HapticFeedback.mediumImpact(); }, 
-            child: Container(
-              margin: const EdgeInsets.all(20), decoration: BoxDecoration(border: Border.all(color: const Color(0xFFB829EA), width: 2), borderRadius: BorderRadius.circular(20), color: const Color(0xFF15161E)),
-              child: const Center(child: Text('اسحب للتحريك - المس للنقر\n(Trackpad)', textAlign: TextAlign.center, style: TextStyle(color: Colors.white70, fontSize: 16))),
-            ),
-          ),
-        ),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            IconButton(icon: const Icon(Icons.remove_circle_outline, color: Colors.redAccent, size: 30), onPressed: () => sendCommand("SPEED_DOWN")),
-            const Padding(padding: EdgeInsets.symmetric(horizontal: 15), child: Text("حساسية الماوس", style: TextStyle(color: Colors.white, fontSize: 16))),
-            IconButton(icon: const Icon(Icons.add_circle_outline, color: Colors.greenAccent, size: 30), onPressed: () => sendCommand("SPEED_UP")),
-          ],
-        ),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [_mouseBtn('يسار', 'M_L_DOWN', 'M_L_UP'), _mouseBtn('يمين', 'M_R_DOWN', 'M_R_UP')],
-        ),
+        Expanded(child: GestureDetector(onPanStart: (details) => _lastTouchPosition = details.localPosition, onPanUpdate: (details) { if (_lastTouchPosition != null) { double dx = details.localPosition.dx - _lastTouchPosition!.dx; double dy = details.localPosition.dy - _lastTouchPosition!.dy; _lastTouchPosition = details.localPosition; sendCommand('M_MOVE:${dx.toStringAsFixed(1)}:${dy.toStringAsFixed(1)}'); } }, onPanEnd: (details) => _lastTouchPosition = null, onTap: () { sendCommand('M_CLICK'); HapticFeedback.selectionClick(); }, onDoubleTap: () { sendCommand('M_DCLICK'); HapticFeedback.mediumImpact(); }, child: Container(margin: const EdgeInsets.all(20), decoration: BoxDecoration(border: Border.all(color: const Color(0xFFB829EA), width: 2), borderRadius: BorderRadius.circular(20), color: const Color(0xFF15161E)), child: const Center(child: Text('اسحب للتحريك - المس للنقر\n(Trackpad)', textAlign: TextAlign.center, style: TextStyle(color: Colors.white70, fontSize: 16)))))),
+        Row(mainAxisAlignment: MainAxisAlignment.center, children: [IconButton(icon: const Icon(Icons.remove_circle_outline, color: Colors.redAccent, size: 30), onPressed: () => sendCommand("SPEED_DOWN")), const Padding(padding: EdgeInsets.symmetric(horizontal: 15), child: Text("حساسية الماوس", style: TextStyle(color: Colors.white, fontSize: 16))), IconButton(icon: const Icon(Icons.add_circle_outline, color: Colors.greenAccent, size: 30), onPressed: () => sendCommand("SPEED_UP"))]),
+        Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [_mouseBtn('يسار', 'M_L_DOWN', 'M_L_UP'), _mouseBtn('يمين', 'M_R_DOWN', 'M_R_UP')]),
         const SizedBox(height: 80), 
       ],
     );
   }
 
   Widget _mouseBtn(String t, String down, String up) {
-    return GestureDetector(
-      onTapDown: (_) => sendCommand(down), onTapUp: (_) => sendCommand(up),
-      child: Container(padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 20), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(10)), child: Text(t)),
-    );
+    return GestureDetector(onTapDown: (_) => sendCommand(down), onTapUp: (_) => sendCommand(up), child: Container(padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 20), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(10)), child: Text(t)));
   }
 }
