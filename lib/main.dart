@@ -2,9 +2,10 @@ import 'package:flutter/material.dart';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
+import 'dart:typed_data'; 
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
-import 'package:flutter_mjpeg/flutter_mjpeg.dart'; // المكتبة الجديدة السحرية
+import 'package:flutter_mjpeg/flutter_mjpeg.dart'; 
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -53,8 +54,19 @@ class _MainScreenState extends State<MainScreen> {
   Timer? _monitorTimer;
   bool isSyncing = false;
 
+  // ==========================================
+  // متغيرات الاتصال والفيديو المدمجة
+  // ==========================================
   Socket? _tcpSocket; 
+  ServerSocket? _serverSocket; // للـ USB
   bool isIosUsbMode = false; 
+
+  // خاص بفيديو الـ USB (TCP Push)
+  ServerSocket? _videoServerSocket; 
+  Socket? _videoSocket;
+  Uint8List? _currentFrame;
+  final BytesBuilder _videoBuffer = BytesBuilder();
+  int _expectedFrameSize = 0;
 
   double floatingX = 20.0;
   double floatingY = 100.0;
@@ -66,13 +78,16 @@ class _MainScreenState extends State<MainScreen> {
   void dispose() {
     _monitorTimer?.cancel();
     _tcpSocket?.close(); 
+    _serverSocket?.close();
+    _stopVideoStream();
     super.dispose();
   }
 
   // ==========================================
-  // 1. الاتصال والأوامر
+  // 1. الاتصال والأوامر (Wi-Fi & USB)
   // ==========================================
   Future<void> _connectTcp() async {
+    if (isIosUsbMode) return; // الـ USB له نظامه الخاص
     _tcpSocket?.close();
     if (deviceIp.isEmpty) return;
     try {
@@ -85,49 +100,77 @@ class _MainScreenState extends State<MainScreen> {
 
   void sendCommand(String command) {
     if (_tcpSocket != null) {
-      try { _tcpSocket!.write("$command\n"); } catch (e) { _connectTcp(); }
+      try { _tcpSocket!.write("$command\n"); } catch (e) { if (!isIosUsbMode) _connectTcp(); }
     } else {
-      _connectTcp().then((_) => _tcpSocket?.write("$command\n"));
+      if (!isIosUsbMode) _connectTcp().then((_) => _tcpSocket?.write("$command\n"));
     }
   }
 
   // ==========================================
-  // 2. الاكتشاف الذكي (USB & Wi-Fi)
+  // 2. نظام الاكتشاف الهجين (السر هنا)
   // ==========================================
-  Future<void> autoDiscoverPC() async {
-    setState(() {
-      isScanning = true;
-      deviceIp = ""; 
-    });
+  
+  // أ. خادم الـ USB (الآيباد ينتظر الكمبيوتر)
+  Future<void> _startIosUsbServer() async {
+    try {
+      _serverSocket?.close();
+      _tcpSocket?.close();
 
-    if (!isWifiSelected) {
-      setState(() {
-        isIosUsbMode = true;
-        connectionStatus = "جاري الاتصال عبر سلك USB ⏳...";
-        statusColor = Colors.orange;
-      });
-      
-      // في وضع الـ USB، الآيبي دائماً محلي لأن الكمبيوتر يبني نفق للآيباد
-      await Future.delayed(const Duration(seconds: 1));
-      try {
-        Socket testSocket = await Socket.connect('127.0.0.1', 8888, timeout: const Duration(seconds: 3));
-        testSocket.close();
-        _onDeviceFound("127.0.0.1", "الـ USB السريع 🚀");
-      } catch (e) {
+      _serverSocket = await ServerSocket.bind(InternetAddress.anyIPv4, 8080);
+      debugPrint("📱 وضع الـ USB: الآيباد ينتظر دخول الكمبيوتر...");
+
+      _serverSocket!.listen((Socket socket) {
+        debugPrint("✅ تم ربط نفق الـ USB بنجاح!");
         setState(() {
-          connectionStatus = "فشل الاتصال عبر USB. تأكد من تشغيل البرنامج في الكمبيوتر.";
-          statusColor = Colors.red;
+          deviceIp = "127.0.0.1"; 
+          _tcpSocket = socket; 
+          connectionStatus = "تم الاتصال الخارق عبر سلك الـ USB ✓";
+          statusColor = Colors.green;
           isScanning = false;
         });
-      }
+
+        socket.listen(
+          (List<int> data) {},
+          onDone: () {
+            if (mounted) {
+              setState(() {
+                connectionStatus = "تم فصل سلك الـ USB ✗";
+                statusColor = Colors.red;
+                _tcpSocket = null;
+                _stopVideoStream();
+              });
+            }
+          },
+          onError: (e) { _tcpSocket = null; _stopVideoStream(); },
+        );
+      });
+    } catch (e) {
+      setState(() {
+        connectionStatus = "فشل فتح منفذ الـ USB: $e";
+        statusColor = Colors.red;
+        isScanning = false;
+      });
+    }
+  }
+
+  Future<void> autoDiscoverPC() async {
+    setState(() { isScanning = true; deviceIp = ""; });
+
+    if (!isWifiSelected) {
+      // تشغيل نظام الـ USB القديم القوي
+      setState(() {
+        isIosUsbMode = true;
+        connectionStatus = "جاري بناء النفق عبر السلك ⏳...\n(يرجى التأكد من البرنامج في الكمبيوتر)";
+        statusColor = Colors.orange;
+      });
+      await _startIosUsbServer();
     } else {
+      // تشغيل نظام الواي فاي (الرادار)
       setState(() {
         isIosUsbMode = false;
         connectionStatus = "جاري استماع الرادار عبر الواي فاي 📶...";
         statusColor = Colors.orange;
       });
-      
-      // استماع لنداء الكمبيوتر (الرادار القديم المستقر)
       try {
         RawDatagramSocket udpSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 5555);
         udpSocket.listen((RawSocketEvent event) {
@@ -135,9 +178,9 @@ class _MainScreenState extends State<MainScreen> {
             Datagram? dg = udpSocket.receive();
             if (dg != null) {
               String msg = utf8.decode(dg.data).trim();
-              if (msg == "PC_SERVER_HERE") {
+              if (msg.contains("PC_SERVER_HERE")) {
                 if (deviceIp.isEmpty && mounted) {
-                  _onDeviceFound(dg.address.address, "الواي فاي (رادار) 📶");
+                  _onDeviceFound(dg.address.address, "الواي فاي 📶");
                   udpSocket.close();
                 }
               }
@@ -170,11 +213,71 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   // ==========================================
-  // 3. مراقب النظام والمزامنة
+  // 3. نظام فيديو الـ USB (TCP Push)
+  // ==========================================
+  Future<void> _startUsbVideoStream() async {
+    _stopVideoStream(); 
+    try {
+      _videoServerSocket = await ServerSocket.bind(InternetAddress.anyIPv4, 5001);
+      _videoServerSocket!.listen((Socket socket) {
+        _videoSocket = socket;
+        socket.listen(
+          (Uint8List data) {
+            _videoBuffer.add(data);
+            _processVideoBuffer();
+          },
+          onDone: () => _stopVideoStream(),
+          onError: (e) => _stopVideoStream(),
+        );
+      });
+    } catch (e) {
+      debugPrint("[X] فشل فتح سيرفر الفيديو: $e");
+    }
+  }
+
+  void _processVideoBuffer() {
+    var bytes = _videoBuffer.takeBytes(); 
+    int offset = 0;
+    Uint8List? latestFrame; 
+
+    while (true) {
+      if (_expectedFrameSize == 0 && (bytes.length - offset) >= 4) {
+        _expectedFrameSize = ByteData.sublistView(bytes, offset, offset + 4).getUint32(0, Endian.big);
+        offset += 4;
+      }
+      if (_expectedFrameSize > 0 && (bytes.length - offset) >= _expectedFrameSize) {
+        latestFrame = bytes.sublist(offset, offset + _expectedFrameSize);
+        offset += _expectedFrameSize;
+        _expectedFrameSize = 0; 
+      } else {
+        break; 
+      }
+    }
+
+    if (latestFrame != null && mounted && isMonitorMode) {
+      setState(() { _currentFrame = latestFrame; });
+    }
+    if (offset < bytes.length) {
+      _videoBuffer.add(bytes.sublist(offset));
+    }
+  }
+
+  void _stopVideoStream() {
+    _videoSocket?.close();
+    _videoServerSocket?.close();
+    _videoSocket = null;
+    _videoServerSocket = null;
+    _videoBuffer.clear();
+    _expectedFrameSize = 0;
+    if (mounted) setState(() { _currentFrame = null; });
+  }
+
+  // ==========================================
+  // 4. مراقب النظام والمزامنة
   // ==========================================
   void startMonitor() {
     _monitorTimer?.cancel();
-    if (deviceIp.isEmpty) return; 
+    if (deviceIp.isEmpty || isIosUsbMode) return; // نوقف مراقب HTTP في سلك الـ USB
 
     _monitorTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
       try {
@@ -195,6 +298,12 @@ class _MainScreenState extends State<MainScreen> {
   void stopMonitor() => _monitorTimer?.cancel();
 
   Future<void> syncApps() async {
+    if (isIosUsbMode) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("الرجاء استخدام الواي فاي لمرة واحدة لمزامنة التطبيقات.")));
+      }
+      return;
+    }
     if (deviceIp.isEmpty) return; 
     setState(() => isSyncing = true);
     try {
@@ -243,13 +352,14 @@ class _MainScreenState extends State<MainScreen> {
       isMonitorMode = false;
       _currentIndex = 4; 
     });
+    _stopVideoStream();
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     startMonitor();
   }
 
   // ==========================================
-  // 4. بناء واجهة المستخدم
+  // 5. بناء واجهة المستخدم
   // ==========================================
   @override
   Widget build(BuildContext context) {
@@ -275,13 +385,17 @@ class _MainScreenState extends State<MainScreen> {
               Center(
                 child: deviceIp.isEmpty 
                     ? const Text("الرجاء الاتصال بالكمبيوتر أولاً", style: TextStyle(color: Colors.white54, fontSize: 16))
-                    // البث المباشر السلس هنا (MJPEG)
-                    : Mjpeg(
-                        isLive: true,
-                        stream: 'http://$deviceIp:5000/video_feed',
-                        fit: BoxFit.contain,
-                        error: (context, error, stack) => const Text("فشل تحميل البث", style: TextStyle(color: Colors.red)),
-                      ),
+                    // 🔥 هنا السحر: إذا كان USB يقرأ بايتات، إذا كان واي فاي يقرأ Mjpeg 🔥
+                    : (isIosUsbMode
+                        ? (_currentFrame == null
+                            ? const Text("جاري التقاط بث الـ USB السريع...", style: TextStyle(color: Colors.white54, fontSize: 16))
+                            : Image.memory(_currentFrame!, fit: BoxFit.contain, gaplessPlayback: true))
+                        : Mjpeg(
+                            isLive: true,
+                            stream: 'http://$deviceIp:5000/video_feed',
+                            fit: BoxFit.contain,
+                            error: (context, error, stack) => const Text("فشل تحميل البث", style: TextStyle(color: Colors.red)),
+                          )),
               ),
               Positioned(
                 top: 20, left: 20,
@@ -359,6 +473,10 @@ class _MainScreenState extends State<MainScreen> {
               SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
               SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
               stopMonitor();
+              
+              // تشغيل خادم الفيديو إذا كان الوضع USB
+              if (isIosUsbMode) _startUsbVideoStream();
+              
             } else {
               setState(() => _currentIndex = index);
               index == 4 ? startMonitor() : stopMonitor(); 
@@ -549,7 +667,7 @@ class _MainScreenState extends State<MainScreen> {
       crossAxisCount: 2, padding: const EdgeInsets.all(20), mainAxisSpacing: 20, crossAxisSpacing: 20,
       children: [
         _buildMediaBtn('رفع الصوت', Icons.volume_up, 'VOL_UP'), _buildMediaBtn('خفض الصوت', Icons.volume_down, 'VOL_DOWN'), _buildMediaBtn('كتم', Icons.volume_off, 'VOL_MUTE'),
-        _buildMediaBtn('إيقاف / تشغيل', Icons.play_arrow, 'MEDIA_PLAY_PAUSE'), _buildMediaBtn('المقطع التالي', Icons.skip_next, 'MEDIA_NEXT'), _buildMediaBtn('المقطع السابق', Icons.skip_previous, 'MEDIA_PREV'),
+        _buildMediaBtn('إيقاف / تشغيل', Icons.play_arrow, 'MEDIA_PLAY_PAUSE'), _buildMediaBtn('المقطع التالي', Icons.skip_next, 'MEDIA_NEXT'), _buildMediaBtn('الم অ্যাকطع السابق', Icons.skip_previous, 'MEDIA_PREV'),
       ],
     );
   }
