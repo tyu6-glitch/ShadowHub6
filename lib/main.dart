@@ -348,9 +348,10 @@ class _MainScreenState extends State<MainScreen> {
 
   // 🔥 التعديل السحري لمعالجة تراكم الإطارات والتخلص من التأخير 🔥
   void _processVideoBuffer() {
-    var bytes = _videoBuffer.toBytes();
+    // التعديل السحري هنا: takeBytes يفرغ الطابور فوراً ويسحب البيانات بدون استهلاك الرام
+    var bytes = _videoBuffer.takeBytes(); 
     int offset = 0;
-    Uint8List? latestFrame; // للقط أحدث فريم فقط وتجاهل القديم
+    Uint8List? latestFrame; 
 
     while (true) {
       if (_expectedFrameSize == 0 && (bytes.length - offset) >= 4) {
@@ -359,32 +360,23 @@ class _MainScreenState extends State<MainScreen> {
       }
 
       if (_expectedFrameSize > 0 && (bytes.length - offset) >= _expectedFrameSize) {
-        // استخراج الإطار وتحديث المتغير بأحدث واحد (القديم بيطير تلقائياً)
         latestFrame = bytes.sublist(offset, offset + _expectedFrameSize);
         offset += _expectedFrameSize;
-        
-        _expectedFrameSize = 0; // تصفير الحجم للإطار اللي بعده
+        _expectedFrameSize = 0; 
       } else {
-        break; // ما عاد فيه إطارات كاملة، نوقف الحلقة
+        break; 
       }
     }
 
-    // ⚡ تحديث الشاشة "مرة واحدة فقط" بأحدث إطار متاح بدلاً من تحديثها لكل إطار ⚡
     if (latestFrame != null && mounted && isMonitorMode) {
       setState(() {
         _currentFrame = latestFrame;
       });
     }
 
-    // تنظيف الذاكرة (Buffer) بكفاءة عالية جداً لمنع انهيار الرام
-    if (offset > 0) {
-      if (offset == bytes.length) {
-        _videoBuffer.clear(); // قرأنا كل شيء، فرّغ الذاكرة
-      } else {
-        var remainder = bytes.sublist(offset);
-        _videoBuffer.clear();
-        _videoBuffer.add(remainder); // احتفظ بالجزء غير المكتمل فقط
-      }
+    // إعادة ما تبقى (الجزء غير المكتمل من الإطار) إلى الطابور بشكل نظيف
+    if (offset < bytes.length) {
+      _videoBuffer.add(bytes.sublist(offset));
     }
   }
 
