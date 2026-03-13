@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
-import 'dart:typed_data'; // <-- مهم جداً للتعامل مع البايتات
+import 'dart:typed_data'; 
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
@@ -64,6 +64,7 @@ class _MainScreenState extends State<MainScreen> {
   // ⚡ متغيرات البث المباشر (TCP Video)
   // ==========================================
   Socket? _videoSocket;
+  ServerSocket? _videoServerSocket; // <-- تمت الإضافة: سيرفر لاستقبال الفيديو عبر النفق
   Uint8List? _currentFrame;
   final BytesBuilder _videoBuffer = BytesBuilder();
   int _expectedFrameSize = 0;
@@ -116,7 +117,7 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
-  // 1. سيرفر الـ USB (تم التعديل لقراءة آيبي الكمبيوتر)
+  // 1. سيرفر الـ USB 
   Future<void> _startIosUsbServer() async {
     try {
       _serverSocket?.close();
@@ -129,7 +130,7 @@ class _MainScreenState extends State<MainScreen> {
         debugPrint("✅ الكمبيوتر كسر الباب ودخل عبر السلك بنجاح! 🚀");
 
         setState(() {
-          deviceIp = "127.0.0.1"; // آيبي مبدئي حتى نستلم الآيبي الحقيقي
+          deviceIp = "127.0.0.1"; 
           _tcpSocket = socket; 
           connectionStatus = "تم الاتصال الخارق عبر سلك الـ USB ✓";
           statusColor = Colors.green;
@@ -137,9 +138,7 @@ class _MainScreenState extends State<MainScreen> {
         });
 
         socket.write("START_USB\n");
-        startMonitor();
 
-        // التعديل السحري هنا 🪄: قراءة رسالة الكمبيوتر لاستخراج الـ IP
         socket.listen(
           (List<int> data) {
             try {
@@ -303,31 +302,47 @@ class _MainScreenState extends State<MainScreen> {
   // ⚡ منطق استقبال فيديو الـ TCP الصاروخي ⚡
   // ==========================================
   Future<void> _startVideoStream() async {
-    if (deviceIp.isEmpty) return;
-    
     _stopVideoStream(); 
-    
-    try {
-      debugPrint("[*] جاري الاتصال بخادم الفيديو على المنفذ 5001 - IP: $deviceIp");
-      _videoSocket = await Socket.connect(deviceIp, 5001, timeout: const Duration(seconds: 3));
-      _videoSocket?.setOption(SocketOption.tcpNoDelay, true); 
 
-      _videoSocket!.listen(
-        (Uint8List data) {
-          _videoBuffer.add(data);
-          _processVideoBuffer();
-        },
-        onDone: () {
-          debugPrint("[-] انتهى بث الفيديو.");
-          _stopVideoStream();
-        },
-        onError: (e) {
-          debugPrint("[X] خطأ في بث الفيديو: $e");
-          _stopVideoStream();
-        },
-      );
-    } catch (e) {
-      debugPrint("[X] فشل الاتصال بخادم الفيديو: $e");
+    if (isIosUsbMode) {
+      // تعديل السلك: الآيباد هو السيرفر وينتظر فيديو الكمبيوتر
+      try {
+        debugPrint("[*] وضع الـ USB: جاري انتظار الكمبيوتر لبث الفيديو على المنفذ 5001...");
+        _videoServerSocket = await ServerSocket.bind(InternetAddress.anyIPv4, 5001);
+        _videoServerSocket!.listen((Socket socket) {
+          debugPrint("[+] بدأ استلام الفيديو عبر السلك بنجاح!");
+          _videoSocket = socket;
+          socket.listen(
+            (Uint8List data) {
+              _videoBuffer.add(data);
+              _processVideoBuffer();
+            },
+            onDone: () => _stopVideoStream(),
+            onError: (e) => _stopVideoStream(),
+          );
+        });
+      } catch (e) {
+        debugPrint("[X] فشل فتح سيرفر الفيديو: $e");
+      }
+    } else {
+      // الاتصال العادي عبر الواي فاي
+      if (deviceIp.isEmpty) return;
+      try {
+        debugPrint("[*] جاري الاتصال بخادم الفيديو على المنفذ 5001 - IP: $deviceIp");
+        _videoSocket = await Socket.connect(deviceIp, 5001, timeout: const Duration(seconds: 3));
+        _videoSocket?.setOption(SocketOption.tcpNoDelay, true); 
+
+        _videoSocket!.listen(
+          (Uint8List data) {
+            _videoBuffer.add(data);
+            _processVideoBuffer();
+          },
+          onDone: () => _stopVideoStream(),
+          onError: (e) => _stopVideoStream(),
+        );
+      } catch (e) {
+        debugPrint("[X] فشل الاتصال بخادم الفيديو: $e");
+      }
     }
   }
 
@@ -366,7 +381,9 @@ class _MainScreenState extends State<MainScreen> {
 
   void _stopVideoStream() {
     _videoSocket?.close();
+    _videoServerSocket?.close(); // تم إضافة إغلاق السيرفر
     _videoSocket = null;
+    _videoServerSocket = null;
     _videoBuffer.clear();
     _expectedFrameSize = 0;
     if (mounted) {
@@ -382,7 +399,8 @@ class _MainScreenState extends State<MainScreen> {
 
   void startMonitor() {
     _monitorTimer?.cancel();
-    if (deviceIp.isEmpty || deviceIp == "127.0.0.1") return; // ننتظر استلام الـ IP الفعلي
+    // إيقاف الـ HTTP عن طريق السلك مؤقتاً لتجنب المشاكل (لأن الكمبيوتر ماله آيبي واضح بدون نقطة اتصال)
+    if (deviceIp.isEmpty || isIosUsbMode) return; 
 
     _monitorTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
       try {
@@ -405,6 +423,15 @@ class _MainScreenState extends State<MainScreen> {
   void stopMonitor() => _monitorTimer?.cancel();
 
   Future<void> syncApps() async {
+    if (isIosUsbMode) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("الرجاء استخدام وضع الواي فاي لمرة واحدة فقط لمزامنة التطبيقات، ثم العودة لوضع السلك.")),
+        );
+      }
+      return;
+    }
+
     if (deviceIp.isEmpty) return; 
     setState(() => isSyncing = true);
     try {
