@@ -56,12 +56,12 @@ class _MainScreenState extends State<MainScreen> {
   Timer? _monitorTimer;
   bool isSyncing = false;
 
-  Socket? _tcpSocket; // سوكت الأوامر (الماوس/الكيبورد)
+  Socket? _tcpSocket; 
   ServerSocket? _serverSocket;
   bool isIosUsbMode = false; 
 
   // ==========================================
-  // ⚡ متغيرات البث المباشر (TCP Video) الجديدة
+  // ⚡ متغيرات البث المباشر (TCP Video)
   // ==========================================
   Socket? _videoSocket;
   Uint8List? _currentFrame;
@@ -81,7 +81,7 @@ class _MainScreenState extends State<MainScreen> {
     _monitorTimer?.cancel();
     _tcpSocket?.close(); 
     _serverSocket?.close(); 
-    _stopVideoStream(); // إغلاق سوكت الفيديو عند الخروج
+    _stopVideoStream(); 
     super.dispose();
   }
 
@@ -116,67 +116,84 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
-  // 1. سيرفر الـ USB (التعديل الجديد للتحكم من الجوال)
+  // 1. سيرفر الـ USB (تم التعديل لقراءة آيبي الكمبيوتر)
   Future<void> _startIosUsbServer() async {
     try {
       _serverSocket?.close();
       _tcpSocket?.close();
 
       _serverSocket = await ServerSocket.bind(InternetAddress.anyIPv4, 8080);
-      debugPrint("📱 التطبيق جاهز وينتظر دخول الكمبيوتر عبر نفق الـ USB على منفذ 8080...");
+      debugPrint("📱 التطبيق جاهز وينتظر دخول الكمبيوتر عبر السلك على منفذ 8080...");
 
       _serverSocket!.listen((Socket socket) {
-        debugPrint("✅ الكمبيوتر كسر الباب ودخل عبر نفق السلك بنجاح! 🚀");
+        debugPrint("✅ الكمبيوتر كسر الباب ودخل عبر السلك بنجاح! 🚀");
 
         setState(() {
-          // التعديل 1: إجبار التطبيق على استخدام Localhost لأن النفق يوصل للكمبيوتر
-          deviceIp = "127.0.0.1"; 
+          deviceIp = "127.0.0.1"; // آيبي مبدئي حتى نستلم الآيبي الحقيقي
           _tcpSocket = socket; 
           connectionStatus = "تم الاتصال الخارق عبر سلك الـ USB ✓";
           statusColor = Colors.green;
           isScanning = false;
         });
 
-        // التعديل 2: إرسال أمر سري للكمبيوتر عشان يبدأ يبث لنا (التحكم من الجوال)
         socket.write("START_USB\n");
-        debugPrint("🎯 أرسلنا أمر START_USB للكمبيوتر");
-        
         startMonitor();
 
+        // التعديل السحري هنا 🪄: قراءة رسالة الكمبيوتر لاستخراج الـ IP
         socket.listen(
           (List<int> data) {
-            // استقبال أي ردود من الكمبيوتر هنا لو أردنا
+            try {
+              String msg = utf8.decode(data).trim();
+              if (msg.contains("PC_IP:")) {
+                RegExp regExp = RegExp(r"PC_IP:([0-9\.]+)");
+                var match = regExp.firstMatch(msg);
+                if (match != null) {
+                  setState(() {
+                    deviceIp = match.group(1)!;
+                  });
+                  debugPrint("🎯 استلمنا الآيبي الفعلي للكمبيوتر: $deviceIp");
+                }
+              }
+            } catch (e) {
+              debugPrint("خطأ في قراءة بيانات السوكت: $e");
+            }
           },
           onDone: () {
-            setState(() {
-              connectionStatus = "تم فصل سلك الـ USB ✗";
-              statusColor = Colors.red;
-              _tcpSocket = null;
-              _stopVideoStream();
-            });
+            if (mounted) {
+              setState(() {
+                connectionStatus = "تم فصل سلك الـ USB ✗";
+                statusColor = Colors.red;
+                _tcpSocket = null;
+                _stopVideoStream();
+              });
+            }
             socket.destroy();
           },
           onError: (error) {
-            setState(() {
-              connectionStatus = "خطأ في السلك ✗";
-              statusColor = Colors.red;
-              _tcpSocket = null;
-              _stopVideoStream();
-            });
+            if (mounted) {
+              setState(() {
+                connectionStatus = "خطأ في السلك ✗";
+                statusColor = Colors.red;
+                _tcpSocket = null;
+                _stopVideoStream();
+              });
+            }
             socket.destroy();
           },
         );
       });
     } catch (e) {
-      setState(() {
-        connectionStatus = "فشل فتح منفذ الـ USB: $e";
-        statusColor = Colors.red;
-        isScanning = false;
-      });
+      if (mounted) {
+        setState(() {
+          connectionStatus = "فشل فتح منفذ الـ USB: $e";
+          statusColor = Colors.red;
+          isScanning = false;
+        });
+      }
     }
   }
 
-  // 2. رادار الواي فاي (كما هو بدون تغيير)
+  // 2. رادار الواي فاي
   Future<void> _scanWifiRadar() async {
     String? foundIp;
     try {
@@ -291,7 +308,7 @@ class _MainScreenState extends State<MainScreen> {
     _stopVideoStream(); 
     
     try {
-      debugPrint("[*] جاري الاتصال بخادم الفيديو على المنفذ 5001...");
+      debugPrint("[*] جاري الاتصال بخادم الفيديو على المنفذ 5001 - IP: $deviceIp");
       _videoSocket = await Socket.connect(deviceIp, 5001, timeout: const Duration(seconds: 3));
       _videoSocket?.setOption(SocketOption.tcpNoDelay, true); 
 
@@ -360,24 +377,26 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   // ==========================================
-  // باقي الكود والواجهات (بدون أي تغيير)
+  // باقي الكود والواجهات
   // ==========================================
 
   void startMonitor() {
     _monitorTimer?.cancel();
-    if (deviceIp.isEmpty) return; 
+    if (deviceIp.isEmpty || deviceIp == "127.0.0.1") return; // ننتظر استلام الـ IP الفعلي
 
     _monitorTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
       try {
         final response = await http.get(Uri.parse('http://$deviceIp:5000/get_stats')).timeout(const Duration(seconds: 1));
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
-          setState(() {
-            double cpu = double.tryParse(data['cpu']?.toString() ?? '0') ?? 0.0;
-            double ram = double.tryParse(data['ram']?.toString() ?? '0') ?? 0.0;
-            cpuUsage = cpu.toStringAsFixed(1);
-            ramUsage = ram.toStringAsFixed(1);
-          });
+          if (mounted) {
+            setState(() {
+              double cpu = double.tryParse(data['cpu']?.toString() ?? '0') ?? 0.0;
+              double ram = double.tryParse(data['ram']?.toString() ?? '0') ?? 0.0;
+              cpuUsage = cpu.toStringAsFixed(1);
+              ramUsage = ram.toStringAsFixed(1);
+            });
+          }
         }
       } catch (e) {}
     });
@@ -417,16 +436,16 @@ class _MainScreenState extends State<MainScreen> {
                fetchedApps.add({"name": appNames[i], "icon": iconBase64, "index": i.toString()});
             }
           }
-          setState(() => customApps = fetchedApps);
+          if (mounted) setState(() => customApps = fetchedApps);
         } else {
-          setState(() => customApps = []);
+          if (mounted) setState(() => customApps = []);
         }
       }
       httpClient.close();
     } catch (e) {
       debugPrint("خطأ المزامنة: $e");
     } finally {
-      setState(() => isSyncing = false);
+      if (mounted) setState(() => isSyncing = false);
     }
   }
 
