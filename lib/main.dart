@@ -116,32 +116,36 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
-  // 1. سيرفر الـ USB
+  // 1. سيرفر الـ USB (التعديل الجديد للتحكم من الجوال)
   Future<void> _startIosUsbServer() async {
     try {
       _serverSocket?.close();
       _tcpSocket?.close();
 
       _serverSocket = await ServerSocket.bind(InternetAddress.anyIPv4, 8080);
-      debugPrint("📱 التطبيق جاهز وينتظر دخول الكمبيوتر عبر السلك على منفذ 8080...");
+      debugPrint("📱 التطبيق جاهز وينتظر دخول الكمبيوتر عبر نفق الـ USB على منفذ 8080...");
 
       _serverSocket!.listen((Socket socket) {
-        debugPrint("✅ الكمبيوتر كسر الباب ودخل عبر السلك بنجاح! 🚀");
+        debugPrint("✅ الكمبيوتر كسر الباب ودخل عبر نفق السلك بنجاح! 🚀");
+
+        setState(() {
+          // التعديل 1: إجبار التطبيق على استخدام Localhost لأن النفق يوصل للكمبيوتر
+          deviceIp = "127.0.0.1"; 
+          _tcpSocket = socket; 
+          connectionStatus = "تم الاتصال الخارق عبر سلك الـ USB ✓";
+          statusColor = Colors.green;
+          isScanning = false;
+        });
+
+        // التعديل 2: إرسال أمر سري للكمبيوتر عشان يبدأ يبث لنا (التحكم من الجوال)
+        socket.write("START_USB\n");
+        debugPrint("🎯 أرسلنا أمر START_USB للكمبيوتر");
+        
+        startMonitor();
 
         socket.listen(
           (List<int> data) {
-            String message = utf8.decode(data).trim();
-            if (message.startsWith("PC_IP:")) {
-              setState(() {
-                deviceIp = message.split(":")[1]; 
-                _tcpSocket = socket; 
-                connectionStatus = "تم الاتصال الخارق عبر سلك الـ USB ✓";
-                statusColor = Colors.green;
-                isScanning = false;
-              });
-              debugPrint("🎯 استلمنا آيبي السلك: $deviceIp");
-              startMonitor(); 
-            }
+            // استقبال أي ردود من الكمبيوتر هنا لو أردنا
           },
           onDone: () {
             setState(() {
@@ -172,7 +176,7 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
-  // 2. رادار الواي فاي
+  // 2. رادار الواي فاي (كما هو بدون تغيير)
   Future<void> _scanWifiRadar() async {
     String? foundIp;
     try {
@@ -264,7 +268,7 @@ class _MainScreenState extends State<MainScreen> {
     if (!isWifiSelected) {
       setState(() {
         isIosUsbMode = true;
-        connectionStatus = "جاري انتظار الكمبيوتر عبر منفذ الـ USB ⏳...\n(يرجى تشغيل السكربت في الكمبيوتر)";
+        connectionStatus = "جاري فتح وبناء النفق السري عبر السلك ⏳...\n(يرجى التأكد من تشغيل البرنامج في الكمبيوتر)";
         statusColor = Colors.orange;
       });
       await _startIosUsbServer();
@@ -284,12 +288,12 @@ class _MainScreenState extends State<MainScreen> {
   Future<void> _startVideoStream() async {
     if (deviceIp.isEmpty) return;
     
-    _stopVideoStream(); // تأكد من إغلاق أي اتصال سابق
+    _stopVideoStream(); 
     
     try {
       debugPrint("[*] جاري الاتصال بخادم الفيديو على المنفذ 5001...");
       _videoSocket = await Socket.connect(deviceIp, 5001, timeout: const Duration(seconds: 3));
-      _videoSocket?.setOption(SocketOption.tcpNoDelay, true); // إلغاء التأخير
+      _videoSocket?.setOption(SocketOption.tcpNoDelay, true); 
 
       _videoSocket!.listen(
         (Uint8List data) {
@@ -310,19 +314,16 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
-  // تم تحسين هذه الدالة جذرياً لضمان عدم استهلاك الذاكرة (Memory Leak) والحفاظ على سرعة الـ 60 فريم
   void _processVideoBuffer() {
     var bytes = _videoBuffer.toBytes();
     int offset = 0;
 
     while (true) {
-      // 1. استخراج حجم الإطار (4 بايت)
       if (_expectedFrameSize == 0 && (bytes.length - offset) >= 4) {
         _expectedFrameSize = ByteData.sublistView(bytes, offset, offset + 4).getUint32(0, Endian.big);
         offset += 4;
       }
 
-      // 2. قراءة الإطار كاملاً إذا توفرت بياناته
       if (_expectedFrameSize > 0 && (bytes.length - offset) >= _expectedFrameSize) {
         var frameData = bytes.sublist(offset, offset + _expectedFrameSize);
         offset += _expectedFrameSize;
@@ -333,14 +334,12 @@ class _MainScreenState extends State<MainScreen> {
           });
         }
         
-        _expectedFrameSize = 0; // تصفير العداد لانتظار الإطار التالي
+        _expectedFrameSize = 0; 
       } else {
-        // إذا لم تكتمل البيانات، نخرج من اللوب
         break;
       }
     }
 
-    // تنظيف البفر والاحتفاظ بالبيانات المتبقية (الغير مكتملة) للإطار القادم فقط
     if (offset > 0) {
       var remainder = bytes.sublist(offset);
       _videoBuffer.clear();
@@ -361,7 +360,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   // ==========================================
-  // باقي الكود والواجهات
+  // باقي الكود والواجهات (بدون أي تغيير)
   // ==========================================
 
   void startMonitor() {
@@ -441,7 +440,7 @@ class _MainScreenState extends State<MainScreen> {
       isMonitorMode = false;
       _currentIndex = 4; 
     });
-    _stopVideoStream(); // إيقاف البث عند الخروج من الشاشة
+    _stopVideoStream(); 
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     startMonitor();
@@ -471,9 +470,6 @@ class _MainScreenState extends State<MainScreen> {
           left: false, right: false, top: false, bottom: false,
           child: Stack(
             children: [
-              // ==========================================
-              // الشاشة الجديدة السريعة (Memory Image)
-              // ==========================================
               Center(
                 child: (deviceIp.isEmpty || connectionStatus.contains("فشل") || connectionStatus.contains("لم يتم"))
                     ? const Text("الرجاء البحث عن الكمبيوتر والاتصال به أولاً", style: TextStyle(color: Colors.white54, fontSize: 16))
@@ -482,7 +478,7 @@ class _MainScreenState extends State<MainScreen> {
                         : Image.memory(
                             _currentFrame!,
                             fit: BoxFit.contain,
-                            gaplessPlayback: true, // مهم جداً لمنع رمشة الفريمات
+                            gaplessPlayback: true, 
                           ),
               ),
               Positioned(
@@ -574,7 +570,6 @@ class _MainScreenState extends State<MainScreen> {
               SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
               stopMonitor();
               
-              // ⚡ تشغيل البث هنا بمجرد الدخول لوضع الشاشة ⚡
               _startVideoStream(); 
               
             } else {
