@@ -310,30 +310,23 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
+  // تم تحسين هذه الدالة جذرياً لضمان عدم استهلاك الذاكرة (Memory Leak) والحفاظ على سرعة الـ 60 فريم
   void _processVideoBuffer() {
+    var bytes = _videoBuffer.toBytes();
+    int offset = 0;
+
     while (true) {
-      // 1. إذا لم نكن نعرف حجم الإطار بعد، نقرأ أول 4 بايتات
-      if (_expectedFrameSize == 0 && _videoBuffer.length >= 4) {
-        var bytes = _videoBuffer.toBytes();
-        // قراءة الـ 4 بايت وتحويلها لرقم يمثل حجم الصورة
-        _expectedFrameSize = ByteData.sublistView(bytes, 0, 4).getUint32(0, Endian.big);
-        
-        // إزالة الـ 4 بايت من الذاكرة المؤقتة (Buffer)
-        _videoBuffer.clear();
-        _videoBuffer.add(bytes.sublist(4));
+      // 1. استخراج حجم الإطار (4 بايت)
+      if (_expectedFrameSize == 0 && (bytes.length - offset) >= 4) {
+        _expectedFrameSize = ByteData.sublistView(bytes, offset, offset + 4).getUint32(0, Endian.big);
+        offset += 4;
       }
 
-      // 2. إذا عرفنا حجم الإطار ووصلت البيانات كاملة
-      if (_expectedFrameSize > 0 && _videoBuffer.length >= _expectedFrameSize) {
-        var bytes = _videoBuffer.toBytes();
-        // قص الصورة بالضبط
-        var frameData = bytes.sublist(0, _expectedFrameSize);
-        
-        // حفظ ما تبقى من البيانات للإطار التالي
-        _videoBuffer.clear();
-        _videoBuffer.add(bytes.sublist(_expectedFrameSize));
+      // 2. قراءة الإطار كاملاً إذا توفرت بياناته
+      if (_expectedFrameSize > 0 && (bytes.length - offset) >= _expectedFrameSize) {
+        var frameData = bytes.sublist(offset, offset + _expectedFrameSize);
+        offset += _expectedFrameSize;
 
-        // تحديث واجهة المستخدم
         if (mounted && isMonitorMode) {
           setState(() {
             _currentFrame = frameData;
@@ -342,9 +335,16 @@ class _MainScreenState extends State<MainScreen> {
         
         _expectedFrameSize = 0; // تصفير العداد لانتظار الإطار التالي
       } else {
-        // إذا لم تكتمل البيانات، نخرج من اللوب وننتظر الحزمة القادمة من السوكت
+        // إذا لم تكتمل البيانات، نخرج من اللوب
         break;
       }
+    }
+
+    // تنظيف البفر والاحتفاظ بالبيانات المتبقية (الغير مكتملة) للإطار القادم فقط
+    if (offset > 0) {
+      var remainder = bytes.sublist(offset);
+      _videoBuffer.clear();
+      _videoBuffer.add(remainder);
     }
   }
 
