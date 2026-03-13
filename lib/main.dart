@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
+import 'dart:typed_data'; // <-- مهم جداً للتعامل مع البايتات
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
-import 'package:flutter_mjpeg/flutter_mjpeg.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -56,9 +56,17 @@ class _MainScreenState extends State<MainScreen> {
   Timer? _monitorTimer;
   bool isSyncing = false;
 
-  Socket? _tcpSocket;
+  Socket? _tcpSocket; // سوكت الأوامر (الماوس/الكيبورد)
   ServerSocket? _serverSocket;
   bool isIosUsbMode = false; 
+
+  // ==========================================
+  // ⚡ متغيرات البث المباشر (TCP Video) الجديدة
+  // ==========================================
+  Socket? _videoSocket;
+  Uint8List? _currentFrame;
+  final BytesBuilder _videoBuffer = BytesBuilder();
+  int _expectedFrameSize = 0;
 
   Offset? _lastTouchPosition;
 
@@ -73,6 +81,7 @@ class _MainScreenState extends State<MainScreen> {
     _monitorTimer?.cancel();
     _tcpSocket?.close(); 
     _serverSocket?.close(); 
+    _stopVideoStream(); // إغلاق سوكت الفيديو عند الخروج
     super.dispose();
   }
 
@@ -81,7 +90,7 @@ class _MainScreenState extends State<MainScreen> {
   // ==========================================
 
   Future<void> _connectTcp() async {
-    if (isIosUsbMode) return; // في وضع الـ USB، السوكت يجينا جاهز من الكمبيوتر
+    if (isIosUsbMode) return; 
     _tcpSocket?.close();
     if (deviceIp.isEmpty) return;
     try {
@@ -107,7 +116,7 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
-  // 1. سيرفر الـ USB (يفتح منفذ 8080 وينتظر سلك usbmuxd)
+  // 1. سيرفر الـ USB
   Future<void> _startIosUsbServer() async {
     try {
       _serverSocket?.close();
@@ -122,11 +131,10 @@ class _MainScreenState extends State<MainScreen> {
         socket.listen(
           (List<int> data) {
             String message = utf8.decode(data).trim();
-            // الكمبيوتر سيرسل الآيبي الوهمي الخاص بنفق الـ USB (مثل 192.168.x.x)
             if (message.startsWith("PC_IP:")) {
               setState(() {
                 deviceIp = message.split(":")[1]; 
-                _tcpSocket = socket; // نثبت السوكت عشان نرسل الماوس والكيبورد من خلاله
+                _tcpSocket = socket; 
                 connectionStatus = "تم الاتصال الخارق عبر سلك الـ USB ✓";
                 statusColor = Colors.green;
                 isScanning = false;
@@ -140,6 +148,7 @@ class _MainScreenState extends State<MainScreen> {
               connectionStatus = "تم فصل سلك الـ USB ✗";
               statusColor = Colors.red;
               _tcpSocket = null;
+              _stopVideoStream();
             });
             socket.destroy();
           },
@@ -148,6 +157,7 @@ class _MainScreenState extends State<MainScreen> {
               connectionStatus = "خطأ في السلك ✗";
               statusColor = Colors.red;
               _tcpSocket = null;
+              _stopVideoStream();
             });
             socket.destroy();
           },
@@ -162,7 +172,7 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
-  // 2. رادار الواي فاي (UDP Broadcast) للبحث اللحظي
+  // 2. رادار الواي فاي
   Future<void> _scanWifiRadar() async {
     String? foundIp;
     try {
@@ -185,17 +195,14 @@ class _MainScreenState extends State<MainScreen> {
         }
       });
 
-      // نصرخ في الشبكة: "أين الكمبيوتر؟"
       udpSocket.send(utf8.encode("SHADOWHUB_IPAD"), InternetAddress("255.255.255.255"), 5005);
       
-      // ننتظر ثانية، إذا ما رد الرادار نستخدم طريقة الفحص العادية (Fallback)
       await Future.delayed(const Duration(milliseconds: 1500));
       udpSocket.close();
     } catch (e) {
       debugPrint("خطأ في الرادار: $e");
     }
 
-    // إذا الرادار ما لقط شيء، نسوي مسح سريع للمنافذ (HTTP)
     if (deviceIp.isEmpty) {
       try {
         final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4, includeLinkLocal: false);
@@ -248,7 +255,6 @@ class _MainScreenState extends State<MainScreen> {
     await _connectTcp();
   }
 
-  // الزر الرئيسي للبحث والاتصال
   Future<void> autoDiscoverPC() async {
     setState(() {
       isScanning = true;
@@ -256,7 +262,6 @@ class _MainScreenState extends State<MainScreen> {
     });
 
     if (!isWifiSelected) {
-      // وضع الـ USB فقط
       setState(() {
         isIosUsbMode = true;
         connectionStatus = "جاري انتظار الكمبيوتر عبر منفذ الـ USB ⏳...\n(يرجى تشغيل السكربت في الكمبيوتر)";
@@ -264,7 +269,6 @@ class _MainScreenState extends State<MainScreen> {
       });
       await _startIosUsbServer();
     } else {
-      // وضع الواي فاي
       setState(() {
         isIosUsbMode = false;
         connectionStatus = "جاري البحث بالرادار عبر الواي فاي 📶...";
@@ -275,7 +279,89 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   // ==========================================
-  // باقي الكود ووظائف التطبيق كما هي دون المساس بها
+  // ⚡ منطق استقبال فيديو الـ TCP الصاروخي ⚡
+  // ==========================================
+  Future<void> _startVideoStream() async {
+    if (deviceIp.isEmpty) return;
+    
+    _stopVideoStream(); // تأكد من إغلاق أي اتصال سابق
+    
+    try {
+      debugPrint("[*] جاري الاتصال بخادم الفيديو على المنفذ 5001...");
+      _videoSocket = await Socket.connect(deviceIp, 5001, timeout: const Duration(seconds: 3));
+      _videoSocket?.setOption(SocketOption.tcpNoDelay, true); // إلغاء التأخير
+
+      _videoSocket!.listen(
+        (Uint8List data) {
+          _videoBuffer.add(data);
+          _processVideoBuffer();
+        },
+        onDone: () {
+          debugPrint("[-] انتهى بث الفيديو.");
+          _stopVideoStream();
+        },
+        onError: (e) {
+          debugPrint("[X] خطأ في بث الفيديو: $e");
+          _stopVideoStream();
+        },
+      );
+    } catch (e) {
+      debugPrint("[X] فشل الاتصال بخادم الفيديو: $e");
+    }
+  }
+
+  void _processVideoBuffer() {
+    while (true) {
+      // 1. إذا لم نكن نعرف حجم الإطار بعد، نقرأ أول 4 بايتات
+      if (_expectedFrameSize == 0 && _videoBuffer.length >= 4) {
+        var bytes = _videoBuffer.toBytes();
+        // قراءة الـ 4 بايت وتحويلها لرقم يمثل حجم الصورة
+        _expectedFrameSize = ByteData.sublistView(bytes, 0, 4).getUint32(0, Endian.big);
+        
+        // إزالة الـ 4 بايت من الذاكرة المؤقتة (Buffer)
+        _videoBuffer.clear();
+        _videoBuffer.add(bytes.sublist(4));
+      }
+
+      // 2. إذا عرفنا حجم الإطار ووصلت البيانات كاملة
+      if (_expectedFrameSize > 0 && _videoBuffer.length >= _expectedFrameSize) {
+        var bytes = _videoBuffer.toBytes();
+        // قص الصورة بالضبط
+        var frameData = bytes.sublist(0, _expectedFrameSize);
+        
+        // حفظ ما تبقى من البيانات للإطار التالي
+        _videoBuffer.clear();
+        _videoBuffer.add(bytes.sublist(_expectedFrameSize));
+
+        // تحديث واجهة المستخدم
+        if (mounted && isMonitorMode) {
+          setState(() {
+            _currentFrame = frameData;
+          });
+        }
+        
+        _expectedFrameSize = 0; // تصفير العداد لانتظار الإطار التالي
+      } else {
+        // إذا لم تكتمل البيانات، نخرج من اللوب وننتظر الحزمة القادمة من السوكت
+        break;
+      }
+    }
+  }
+
+  void _stopVideoStream() {
+    _videoSocket?.close();
+    _videoSocket = null;
+    _videoBuffer.clear();
+    _expectedFrameSize = 0;
+    if (mounted) {
+      setState(() {
+        _currentFrame = null;
+      });
+    }
+  }
+
+  // ==========================================
+  // باقي الكود والواجهات
   // ==========================================
 
   void startMonitor() {
@@ -355,6 +441,7 @@ class _MainScreenState extends State<MainScreen> {
       isMonitorMode = false;
       _currentIndex = 4; 
     });
+    _stopVideoStream(); // إيقاف البث عند الخروج من الشاشة
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     startMonitor();
@@ -384,17 +471,19 @@ class _MainScreenState extends State<MainScreen> {
           left: false, right: false, top: false, bottom: false,
           child: Stack(
             children: [
+              // ==========================================
+              // الشاشة الجديدة السريعة (Memory Image)
+              // ==========================================
               Center(
                 child: (deviceIp.isEmpty || connectionStatus.contains("فشل") || connectionStatus.contains("لم يتم"))
                     ? const Text("الرجاء البحث عن الكمبيوتر والاتصال به أولاً", style: TextStyle(color: Colors.white54, fontSize: 16))
-                    : Mjpeg(
-                        isLive: true,
-                        stream: 'http://$deviceIp:5000/video_feed',
-                        fit: BoxFit.contain, 
-                        error: (context, error, stack) => const Center(
-                          child: Text("لا يوجد بث. تأكد من عمل الشاشة الوهمية.", style: TextStyle(color: Colors.redAccent)),
-                        ),
-                      ),
+                    : _currentFrame == null 
+                        ? const Center(child: Text("جاري التقاط البث المباشر...", style: TextStyle(color: Colors.white54, fontSize: 16)))
+                        : Image.memory(
+                            _currentFrame!,
+                            fit: BoxFit.contain,
+                            gaplessPlayback: true, // مهم جداً لمنع رمشة الفريمات
+                          ),
               ),
               Positioned(
                 top: 20, left: 20,
@@ -484,6 +573,10 @@ class _MainScreenState extends State<MainScreen> {
               SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
               SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
               stopMonitor();
+              
+              // ⚡ تشغيل البث هنا بمجرد الدخول لوضع الشاشة ⚡
+              _startVideoStream(); 
+              
             } else {
               setState(() => _currentIndex = index);
               if (index == 4) {
