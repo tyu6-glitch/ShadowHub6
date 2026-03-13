@@ -1,0 +1,30 @@
+workflows:
+  ios-unsigned-build:
+    name: iOS Unsigned Build
+    instance_type: mac_mini_m1
+    environment:
+      flutter: default
+      xcode: latest
+    scripts:
+      - name: جلب حزم فلاتر
+        script: flutter pub get
+      
+      - name: إيقاف طلب التوقيع الإجباري من أبل
+        script: |
+          echo "CODE_SIGNING_REQUIRED = NO" >> ios/Flutter/Release.xcconfig
+          echo "CODE_SIGNING_ALLOWED = NO" >> ios/Flutter/Release.xcconfig
+          echo "CODE_SIGN_IDENTITY = \"\"" >> ios/Flutter/Release.xcconfig
+          echo "EXPANDED_CODE_SIGN_IDENTITY = \"\"" >> ios/Flutter/Release.xcconfig
+      
+      - name: بناء التطبيق بدون توقيع
+        script: flutter build ios --release --no-codesign
+      
+      - name: تحويل التطبيق إلى ملف IPA جاهز
+        script: |
+          mkdir -p build/ios/Payload
+          mv build/ios/iphoneos/Runner.app build/ios/Payload/
+          cd build/ios
+          zip -qr unsigned_app.ipa Payload
+    
+    artifacts:
+      - build/ios/unsigned_app.ipa
