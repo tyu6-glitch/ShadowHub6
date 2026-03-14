@@ -8,5 +8,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-// Update the import to use the correct package name or a relative path.
-// If your main.dart is in lib/main.dart, use:
+import 'package:aaaassss/main.dart';
+
+void main() {
+  testWidgets('App starts', (WidgetTester tester) async {
+    // Build our app and trigger a frame.
+    await tester.pumpWidget(const ShadowHubApp());
+
+    // Verify that the app builds without errors.
+    expect(find.byType(ShadowHubApp), findsOneWidget);
+  });
+}

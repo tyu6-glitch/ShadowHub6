@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/services.dart';
+import 'package:network_info_plus/network_info_plus.dart'; // لا تنسى إضافتها في pubspec.yaml
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -43,7 +44,7 @@ class _MainScreenState extends State<MainScreen> {
   bool isMonitorMode = false; 
   bool isConnecting = false;
 
-  String connectionStatus = "جاهز - اشبك الـ USB أو اضغط اتصال واي فاي";
+  String connectionStatus = "جاهز للاتصال - اشبك USB أو ابحث بالواي فاي";
   Color statusColor = Colors.grey;
   
   double mouseSpeed = 4.0;
@@ -64,7 +65,7 @@ class _MainScreenState extends State<MainScreen> {
 
   double toggleBtnX = 20.0;
   double toggleBtnY = 180.0;
-  bool isToggleBtnTapped = false; // للتأثير البصري عند الضغط
+  bool isToggleBtnTapped = false;
 
   Offset? _lastLongPressOffset;
 
@@ -90,49 +91,59 @@ class _MainScreenState extends State<MainScreen> {
         setupConnection(client, "USB الخارق 🚀");
       });
     } catch (e) {
-      debugPrint("USB Error: $e");
+      debugPrint("USB Server Error: $e");
     }
   }
 
-  // الرادار الذكي (تم تقويته ليرسل 3 نبضات ويتخطى العوائق)
+  // =========================================
+  // المسح الشامل (TCP Sweep) - الطريقة المضمونة للواي فاي
+  // =========================================
   Future<void> connectWifiAuto() async {
     if (isConnected) return;
-    setState(() { isConnecting = true; connectionStatus = "جاري البحث عن الكمبيوتر... 📡"; statusColor = Colors.orange; });
+    setState(() { 
+      isConnecting = true; 
+      connectionStatus = "جاري المسح الشامل للشبكة... 📡"; 
+      statusColor = Colors.orange; 
+    });
 
     try {
-      RawDatagramSocket udpSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
-      udpSocket.broadcastEnabled = true;
-
-      // إرسال 3 نبضات متتالية لضمان وصولها
-      for (int i = 0; i < 3; i++) {
-        udpSocket.send(utf8.encode("SHADOWHUB_IPAD"), InternetAddress("255.255.255.255"), 5555);
-        await Future.delayed(const Duration(milliseconds: 500));
+      final info = NetworkInfo();
+      String? wifiIP = await info.getWifiIP();
+      
+      if (wifiIP == null || !wifiIP.contains('.')) {
+        if (mounted) setState(() { isConnecting = false; connectionStatus = "الآيباد غير متصل بالواي فاي!"; statusColor = Colors.red; });
+        return;
       }
 
-      udpSocket.listen((RawSocketEvent event) async {
-        if (event == RawSocketEvent.read) {
-          Datagram? dg = udpSocket.receive();
-          if (dg != null) {
-            String msg = utf8.decode(dg.data).trim();
-            if (msg.startsWith("SHADOWHUB_PC:")) {
-              String pcIp = msg.split(":")[1];
-              udpSocket.close();
-              try {
-                Socket client = await Socket.connect(pcIp, 8080, timeout: const Duration(seconds: 3));
-                setupConnection(client, "الواي فاي 📶");
-              } catch (e) {
-                 if (mounted) setState(() { isConnecting = false; connectionStatus = "تم العثور عليه ولكن فشل الاتصال!"; statusColor = Colors.red; });
-              }
-            }
-          }
-        }
-      });
-
-      await Future.delayed(const Duration(seconds: 4));
-      if (!isConnected && isConnecting && mounted) {
-        udpSocket.close();
-        setState(() { isConnecting = false; connectionStatus = "لم يتم العثور على الكمبيوتر في الشبكة!"; statusColor = Colors.red; });
+      String subnet = wifiIP.substring(0, wifiIP.lastIndexOf('.'));
+      bool found = false;
+      List<Future<void>> sweepTasks = [];
+      
+      // إرسال 254 طلب اتصال في نفس اللحظة! (الطريقة الهجومية السريعة)
+      for (int i = 1; i < 255; i++) {
+        String targetIp = '$subnet.$i';
+        
+        sweepTasks.add(
+          Socket.connect(targetIp, 8080, timeout: const Duration(milliseconds: 1000))
+              .then((socket) {
+                if (!found) { 
+                  found = true;
+                  setupConnection(socket, "الواي فاي 📶");
+                } else {
+                  socket.destroy(); 
+                }
+              })
+              .catchError((_) { /* تجاهل الأجهزة التي ترفض الاتصال */ })
+        );
       }
+
+      // ننتظر ثانية ونصف بحد أقصى لانتهاء عملية المسح
+      await Future.wait(sweepTasks).timeout(const Duration(milliseconds: 1500), onTimeout: () => []);
+
+      if (!found && mounted) {
+        setState(() { isConnecting = false; connectionStatus = "لم يتم العثور على الكمبيوتر في الشبكة أو البايثون يرفض الاتصال!"; statusColor = Colors.red; });
+      }
+
     } catch (e) {
       if (mounted) setState(() { isConnecting = false; connectionStatus = "خطأ في الرادار!"; statusColor = Colors.red; });
     }
