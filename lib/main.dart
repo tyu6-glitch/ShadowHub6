@@ -36,6 +36,7 @@ class _MainScreenState extends State<MainScreen> {
   List<Map<String, String>> customApps = [];
   
   final TextEditingController _keyboardController = TextEditingController();
+  final TextEditingController _ipController = TextEditingController(); // ← مربع نص الـ IP
   final FocusNode _keyboardFocus = FocusNode();
   String _lastText = ""; 
 
@@ -46,7 +47,6 @@ class _MainScreenState extends State<MainScreen> {
   String connectionStatus = "جاهز للاتصال - اشبك USB أو ابحث بالواي فاي";
   Color statusColor = Colors.grey;
   
-  // المتغيرات الجديدة للتحكم
   double mouseSpeed = 4.0;
   double streamQuality = 75.0;
 
@@ -73,6 +73,7 @@ class _MainScreenState extends State<MainScreen> {
   void dispose() {
     activeSocket?.close();
     serverSocket?.close();
+    _ipController.dispose();
     super.dispose();
   }
 
@@ -89,6 +90,7 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
+  // الاتصال التلقائي بالواي فاي (الرادار)
   Future<void> connectWifiAuto() async {
     if (isConnected) return;
     setState(() { isConnecting = true; connectionStatus = "جاري البحث عن الكمبيوتر بالرادار 📡..."; statusColor = Colors.orange; });
@@ -127,6 +129,32 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
+  // الاتصال اليدوي بالواي فاي (الدالة الجديدة)
+  Future<void> connectWifiManual() async {
+    String ip = _ipController.text.trim();
+    if (ip.isEmpty) return;
+    if (isConnected) return;
+
+    setState(() {
+      isConnecting = true;
+      connectionStatus = "جاري الاتصال اليدوي بـ ($ip)...";
+      statusColor = Colors.orange;
+    });
+
+    try {
+      Socket client = await Socket.connect(ip, 8080, timeout: const Duration(seconds: 3));
+      setupConnection(client, "الواي فاي اليدوي 📶");
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          isConnecting = false;
+          connectionStatus = "فشل الاتصال اليدوي! تأكد من إدخال الـ IP الصحيح.";
+          statusColor = Colors.red;
+        });
+      }
+    }
+  }
+
   void setupConnection(Socket socket, String type) {
     activeSocket = socket;
     activeSocket!.setOption(SocketOption.tcpNoDelay, true);
@@ -137,7 +165,6 @@ class _MainScreenState extends State<MainScreen> {
         String msg = utf8.decode(data, allowMalformed: true);
         if (msg.contains("PC_READY")) {
           activeSocket!.write("IPAD_READY\n");
-          // إرسال الإعدادات الحالية فوراً بعد الاتصال
           sendCommand("SET_QUALITY:$streamQuality");
           sendCommand("SET_SENSITIVITY:$mouseSpeed");
           isHandshakeDone = true;
@@ -191,7 +218,6 @@ class _MainScreenState extends State<MainScreen> {
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   }
 
-  // معالج حركات الماوس المشترك (يحسن التحديد والسحب)
   Widget _buildGestureArea({required Widget child}) {
     return GestureDetector(
       onScaleUpdate: (details) {
@@ -204,7 +230,6 @@ class _MainScreenState extends State<MainScreen> {
       onTap: () { sendCommand("M_CLICK"); HapticFeedback.selectionClick(); },
       onDoubleTap: () { sendCommand("M_DCLICK"); HapticFeedback.mediumImpact(); },
       onSecondaryTap: () => sendCommand("M_R_CLICK"),
-      // السحب والإفلات (Long Press and Drag)
       onLongPressStart: (details) { sendCommand("M_L_DOWN"); HapticFeedback.heavyImpact(); },
       onLongPressMoveUpdate: (details) { sendCommand("M_MOVE:${details.localOffsetFromOrigin.dx}:${details.localOffsetFromOrigin.dy}"); },
       onLongPressEnd: (details) { sendCommand("M_L_UP"); HapticFeedback.selectionClick(); },
@@ -227,7 +252,7 @@ class _MainScreenState extends State<MainScreen> {
 
     if (isMonitorMode) {
       activeScreen = Scaffold(
-        resizeToAvoidBottomInset: false, // 🔥 هذا السطر يمنع الشاشة من التصغير عند فتح الكيبورد
+        resizeToAvoidBottomInset: false,
         backgroundColor: Colors.black,
         body: SafeArea(
           left: false, right: false, top: false, bottom: false,
@@ -350,19 +375,47 @@ class _MainScreenState extends State<MainScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // قسم الاتصال
+          // قسم الاتصال المحدث (يحوي الاتصال اليدوي + الرادار)
           Container(
             padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.3))),
             child: Column(
               children: [
                 const Text("إدارة الاتصال", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)), const SizedBox(height: 15),
-                if (!isConnected)
+                
+                if (!isConnected) ...[
+                  // 1. حقل إدخال الـ IP
+                  TextField(
+                    controller: _ipController,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      hintText: "أدخل الـ IP الموجود في الكمبيوتر (اختياري)",
+                      hintStyle: const TextStyle(color: Colors.grey, fontSize: 14),
+                      filled: true,
+                      fillColor: const Color(0xFF0B0C10),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  
+                  // 2. زر الاتصال اليدوي
+                  ElevatedButton.icon(
+                    onPressed: isConnecting ? null : connectWifiManual,
+                    icon: isConnecting ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Icon(Icons.wifi, color: Colors.white),
+                    label: Text(isConnecting ? 'جاري الاتصال...' : 'اتصال يدوي بالـ IP', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 15), minimumSize: const Size(double.infinity, 55)),
+                  ),
+                  const SizedBox(height: 10),
+                  
+                  // 3. زر الاتصال التلقائي (الرادار) الأساسي
                   ElevatedButton.icon(
                     onPressed: isConnecting ? null : connectWifiAuto,
                     icon: isConnecting ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Icon(Icons.radar, color: Colors.white),
-                    label: Text(isConnecting ? 'جاري البحث...' : 'اتصال سريع (واي فاي)', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                    label: Text(isConnecting ? 'جاري البحث...' : 'اتصال سريع (الرادار)', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                     style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFB829EA), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 15), minimumSize: const Size(double.infinity, 55)),
                   ),
+                ],
+
                 if (isConnected)
                   ElevatedButton.icon(
                     onPressed: manualDisconnect,
@@ -379,7 +432,7 @@ class _MainScreenState extends State<MainScreen> {
           Center(child: Text(connectionStatus, textAlign: TextAlign.center, style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 16))),
           const SizedBox(height: 25),
 
-          // قسم الإعدادات الجديدة (سرعة الماوس وجودة البث)
+          // قسم الإعدادات
           Container(
             padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.3))),
             child: Column(
@@ -388,7 +441,6 @@ class _MainScreenState extends State<MainScreen> {
                 const Center(child: Text("إعدادات الأداء", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white))), 
                 const SizedBox(height: 20),
                 
-                // شريط سرعة الماوس
                 Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                   const Text("سرعة الماوس:", style: TextStyle(color: Colors.white70, fontSize: 16)),
                   Text(mouseSpeed.toStringAsFixed(1), style: const TextStyle(color: Color(0xFFB829EA), fontWeight: FontWeight.bold, fontSize: 16)),
@@ -400,7 +452,6 @@ class _MainScreenState extends State<MainScreen> {
                 ),
                 const SizedBox(height: 15),
 
-                // شريط جودة البث
                 Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                   const Text("جودة بث الشاشة:", style: TextStyle(color: Colors.white70, fontSize: 16)),
                   Text("${streamQuality.toInt()}%", style: const TextStyle(color: Color(0xFFB829EA), fontWeight: FontWeight.bold, fontSize: 16)),
