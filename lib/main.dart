@@ -43,7 +43,7 @@ class _MainScreenState extends State<MainScreen> {
   bool isMonitorMode = false; 
   bool isConnecting = false;
 
-  String connectionStatus = "جاهز للاتصال - اشبك USB أو ابحث بالواي فاي";
+  String connectionStatus = "جاهز - اشبك الـ USB أو اضغط اتصال واي فاي";
   Color statusColor = Colors.grey;
   
   double mouseSpeed = 4.0;
@@ -57,17 +57,15 @@ class _MainScreenState extends State<MainScreen> {
   int expectedFrameLength = 0;
   bool isHandshakeDone = false;
 
-  // إحداثيات الزر العائم للكيبورد
   double floatingX = 20.0;
   double floatingY = 100.0;
   double savedPortraitX = 20.0;
   double savedPortraitY = 100.0;
 
-  // إحداثيات الزر العائم لتبديل الشاشة (الجديد)
   double toggleBtnX = 20.0;
   double toggleBtnY = 180.0;
+  bool isToggleBtnTapped = false; // للتأثير البصري عند الضغط
 
-  // متغير لتصحيح الماوس أثناء السحب المطول
   Offset? _lastLongPressOffset;
 
   @override
@@ -89,22 +87,27 @@ class _MainScreenState extends State<MainScreen> {
       serverSocket = await ServerSocket.bind('127.0.0.1', 8080);
       serverSocket!.listen((Socket client) {
         if (activeSocket != null) { client.close(); return; }
-        setupConnection(client, "سلك الـ USB الخارق 🚀");
+        setupConnection(client, "USB الخارق 🚀");
       });
     } catch (e) {
-      debugPrint("USB Server Error: $e");
+      debugPrint("USB Error: $e");
     }
   }
 
-  // الاتصال التلقائي بالواي فاي (الرادار فقط)
+  // الرادار الذكي (تم تقويته ليرسل 3 نبضات ويتخطى العوائق)
   Future<void> connectWifiAuto() async {
     if (isConnected) return;
-    setState(() { isConnecting = true; connectionStatus = "جاري البحث عن الكمبيوتر بالرادار 📡..."; statusColor = Colors.orange; });
+    setState(() { isConnecting = true; connectionStatus = "جاري البحث عن الكمبيوتر... 📡"; statusColor = Colors.orange; });
 
     try {
       RawDatagramSocket udpSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
       udpSocket.broadcastEnabled = true;
-      udpSocket.send(utf8.encode("SHADOWHUB_IPAD"), InternetAddress("255.255.255.255"), 5555);
+
+      // إرسال 3 نبضات متتالية لضمان وصولها
+      for (int i = 0; i < 3; i++) {
+        udpSocket.send(utf8.encode("SHADOWHUB_IPAD"), InternetAddress("255.255.255.255"), 5555);
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
 
       udpSocket.listen((RawSocketEvent event) async {
         if (event == RawSocketEvent.read) {
@@ -118,14 +121,14 @@ class _MainScreenState extends State<MainScreen> {
                 Socket client = await Socket.connect(pcIp, 8080, timeout: const Duration(seconds: 3));
                 setupConnection(client, "الواي فاي 📶");
               } catch (e) {
-                 if (mounted) setState(() { isConnecting = false; connectionStatus = "فشل الاتصال!"; statusColor = Colors.red; });
+                 if (mounted) setState(() { isConnecting = false; connectionStatus = "تم العثور عليه ولكن فشل الاتصال!"; statusColor = Colors.red; });
               }
             }
           }
         }
       });
 
-      await Future.delayed(const Duration(seconds: 3));
+      await Future.delayed(const Duration(seconds: 4));
       if (!isConnected && isConnecting && mounted) {
         udpSocket.close();
         setState(() { isConnecting = false; connectionStatus = "لم يتم العثور على الكمبيوتر في الشبكة!"; statusColor = Colors.red; });
@@ -198,7 +201,6 @@ class _MainScreenState extends State<MainScreen> {
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   }
 
-  // تصحيح أخطاء سحب الماوس ليكون ناعم جداً
   Widget _buildGestureArea({required Widget child}) {
     return GestureDetector(
       onScaleUpdate: (details) {
@@ -211,11 +213,7 @@ class _MainScreenState extends State<MainScreen> {
       onTap: () { sendCommand("M_CLICK"); HapticFeedback.selectionClick(); },
       onDoubleTap: () { sendCommand("M_DCLICK"); HapticFeedback.mediumImpact(); },
       onSecondaryTap: () => sendCommand("M_R_CLICK"),
-      onLongPressStart: (details) { 
-        _lastLongPressOffset = Offset.zero; 
-        sendCommand("M_L_DOWN"); 
-        HapticFeedback.heavyImpact(); 
-      },
+      onLongPressStart: (details) { _lastLongPressOffset = Offset.zero; sendCommand("M_L_DOWN"); HapticFeedback.heavyImpact(); },
       onLongPressMoveUpdate: (details) { 
         if (_lastLongPressOffset != null) {
           double dx = details.localOffsetFromOrigin.dx - _lastLongPressOffset!.dx;
@@ -224,11 +222,7 @@ class _MainScreenState extends State<MainScreen> {
           sendCommand("M_MOVE:${dx}:${dy}");
         }
       },
-      onLongPressEnd: (details) { 
-        _lastLongPressOffset = null; 
-        sendCommand("M_L_UP"); 
-        HapticFeedback.selectionClick(); 
-      },
+      onLongPressEnd: (details) { _lastLongPressOffset = null; sendCommand("M_L_UP"); HapticFeedback.selectionClick(); },
       child: child,
     );
   }
@@ -353,7 +347,6 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
           
-          // الزر العائم للكيبورد
           Positioned(
             left: floatingX, top: safeFloatingY, 
             child: GestureDetector(
@@ -367,17 +360,28 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
 
-          // الزر العائم للتبديل بين الشاشات (يظهر فقط داخل وضعية الشاشة)
           if (isMonitorMode)
             Positioned(
               left: toggleBtnX, top: toggleBtnY, 
               child: GestureDetector(
                 onPanUpdate: (details) { setState(() { toggleBtnX += details.delta.dx; toggleBtnY += details.delta.dy; }); },
-                onTap: () {
+                onTapDown: (_) => setState(() => isToggleBtnTapped = true),
+                onTapUp: (_) {
+                  setState(() => isToggleBtnTapped = false);
                   sendCommand("TOGGLE_SCREEN");
-                  HapticFeedback.mediumImpact();
+                  HapticFeedback.heavyImpact();
                 },
-                child: Container(padding: const EdgeInsets.all(15), decoration: BoxDecoration(color: Colors.blueAccent.withOpacity(0.4), shape: BoxShape.circle, boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 10, offset: const Offset(0, 4))]), child: const Icon(Icons.switch_video, color: Colors.white, size: 28)),
+                onTapCancel: () => setState(() => isToggleBtnTapped = false),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 100),
+                  padding: EdgeInsets.all(isToggleBtnTapped ? 12 : 15),
+                  decoration: BoxDecoration(
+                    color: isToggleBtnTapped ? Colors.white.withOpacity(0.8) : const Color(0xFFB829EA).withOpacity(0.6), 
+                    shape: BoxShape.circle, 
+                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 4))]
+                  ), 
+                  child: Icon(Icons.desktop_windows, color: isToggleBtnTapped ? Colors.black : Colors.white, size: isToggleBtnTapped ? 24 : 28)
+                ),
               ),
             ),
         ],
@@ -414,7 +418,7 @@ class _MainScreenState extends State<MainScreen> {
                     style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 15), minimumSize: const Size(double.infinity, 55)),
                   ),
                 const SizedBox(height: 15),
-                const Text("ملاحظة: لـ USB، فقط اشبك السلك وسيتصل تلقائياً!", style: TextStyle(color: Colors.green, fontSize: 12)),
+                const Text("ملاحظة: لـ USB، فقط اشبك السلك وسيتصل تلقائياً وبشكل فوري!", style: TextStyle(color: Colors.green, fontSize: 12)),
               ],
             ),
           ),
@@ -458,7 +462,6 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  // ترتيب جديد وتصغير لأزرار الميديا (3 أعمدة لتناسب الأصابع)
   Widget _buildMediaScreen() {
     return GridView.count(
       crossAxisCount: 3, 
