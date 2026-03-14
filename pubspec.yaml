@@ -36,6 +36,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   http: ^0.13.6
   flutter_mjpeg: ^2.0.4
+  network_info_plus: ^5.0.0
 
 dev_dependencies:
   flutter_test:
