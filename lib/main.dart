@@ -99,7 +99,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   // ==========================================
-  // 2. هندسة اتصال الواي فاي (الآيباد هو العميل)
+  // 2. هندسة اتصال الواي فاي (الآيباد هو العميل ويستمع للرادار)
   // ==========================================
   Future<void> _connectWifiCmd() async {
     _wifiCmdSocket?.close();
@@ -112,18 +112,18 @@ class _MainScreenState extends State<MainScreen> {
 
   Future<void> _startWifiDiscovery() async {
     try {
-      RawDatagramSocket udpSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
-      udpSocket.broadcastEnabled = true;
+      // فتح الأذن على منفذ 5555 لسماع نداء الكمبيوتر
+      RawDatagramSocket udpSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 5555);
+      
       udpSocket.listen((RawSocketEvent event) {
         if (event == RawSocketEvent.read) {
           Datagram? dg = udpSocket.receive();
           if (dg != null) {
             String msg = utf8.decode(dg.data).trim();
-            if (msg.contains("SHADOWHUB_PC")) {
-              String ip = msg.split(":")[1];
+            if (msg == "PC_SERVER_HERE") { // إذا سمع الآيباد نداء الكمبيوتر
               if (deviceIp.isEmpty && mounted) {
                 setState(() {
-                  deviceIp = ip;
+                  deviceIp = dg.address.address; // التقاط آيبي الكمبيوتر فوراً
                   connectionStatus = "متصل عبر الواي فاي 📶";
                   statusColor = Colors.green;
                   isScanning = false;
@@ -136,10 +136,13 @@ class _MainScreenState extends State<MainScreen> {
           }
         }
       });
-      udpSocket.send(utf8.encode("SHADOWHUB_IPAD"), InternetAddress("255.255.255.255"), 5555);
+      
+      // ننتظر 3 ثواني، إذا ما سمعنا شيء يعني فشل
       await Future.delayed(const Duration(seconds: 3));
       udpSocket.close();
-    } catch (e) {}
+    } catch (e) {
+      debugPrint("WiFi Scan Error: $e");
+    }
 
     if (deviceIp.isEmpty && mounted) {
       setState(() { connectionStatus = "لم يتم العثور على الكمبيوتر ✗"; statusColor = Colors.red; isScanning = false; });
@@ -147,7 +150,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   // ==========================================
-  // 3. هندسة اتصال الـ USB (الآيباد هو السيرفر)
+  // 3. هندسة اتصال الـ USB (الآيباد هو السيرفر وينتظر الهجوم)
   // ==========================================
   Future<void> _startUsbServers() async {
     try {
@@ -224,7 +227,7 @@ class _MainScreenState extends State<MainScreen> {
       setState(() { connectionStatus = "جاري بناء النفق عبر السلك ⏳..."; statusColor = Colors.orange; });
       await _startUsbServers();
     } else {
-      setState(() { connectionStatus = "جاري البحث بالرادار 📶..."; statusColor = Colors.orange; });
+      setState(() { connectionStatus = "جاري الاستماع للرادار 📶..."; statusColor = Colors.orange; });
       await _startWifiDiscovery();
     }
   }
@@ -249,7 +252,10 @@ class _MainScreenState extends State<MainScreen> {
   void stopMonitor() => _monitorTimer?.cancel();
 
   Future<void> syncApps() async {
-    if (isIosUsbMode) return;
+    if (isIosUsbMode) {
+      if (mounted) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("الرجاء استخدام الواي فاي لمرة واحدة لمزامنة التطبيقات."))); }
+      return;
+    }
     if (deviceIp.isEmpty) return; 
     setState(() => isSyncing = true);
     try {
