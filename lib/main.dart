@@ -44,8 +44,8 @@ class _MainScreenState extends State<MainScreen> {
   bool isConnecting = false;
   bool _isQuickBarOpen = false;
 
-  String connectionStatus = "جاهز للاتصال - اشبك USB أو ابحث بالواي فاي";
-  Color statusColor = Colors.grey;
+  String connectionStatus = "جاري البحث عن الكمبيوتر بصمت... 🔍";
+  Color statusColor = Colors.orange;
   
   double mouseSpeed = 4.0;
   double streamQuality = 75.0;
@@ -60,20 +60,35 @@ class _MainScreenState extends State<MainScreen> {
 
   Offset? _lastLongPressOffset;
   Timer? _volumeTimer;
-  int _lastMouseSendTime = 0; // للتحكم في سرعة إرسال الماوس
+  Timer? _autoConnectTimer; // مؤقت الاتصال الصامت
+  int _lastMouseSendTime = 0;
 
   @override
   void initState() {
     super.initState();
     startUsbServer(); 
+    _startAutoConnectLoop(); // بدء السحر الصامت فور فتح التطبيق
   }
 
   @override
   void dispose() {
     _volumeTimer?.cancel();
+    _autoConnectTimer?.cancel();
     activeSocket?.close();
     serverSocket?.close();
     super.dispose();
+  }
+
+  // ===========================================
+  // نظام الاتصال السحري الصامت (Zero-Config)
+  // ===========================================
+  void _startAutoConnectLoop() {
+    _autoConnectTimer = Timer.periodic(const Duration(seconds: 4), (timer) {
+      if (!isConnected && !isConnecting) {
+        // إذا لم يكن متصلاً، سيقوم بصمت بمسح شبكة الواي فاي (الـ USB يستمع دائماً في الخلفية)
+        _silentWifiSweep();
+      }
+    });
   }
 
   Future<void> startUsbServer() async {
@@ -81,7 +96,7 @@ class _MainScreenState extends State<MainScreen> {
       serverSocket?.close();
       serverSocket = await ServerSocket.bind('127.0.0.1', 8080);
       serverSocket!.listen((Socket client) {
-        if (activeSocket != null) { client.close(); return; }
+        if (activeSocket != null) { manualDisconnect(); }
         setupConnection(client, "USB الخارق 🚀");
       });
     } catch (e) {
@@ -89,15 +104,17 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
-  Future<void> connectWifiAuto() async {
+  Future<void> _silentWifiSweep() async {
     if (isConnected) return;
-    setState(() { isConnecting = true; connectionStatus = "جاري المسح الشامل للشبكة... 📡"; statusColor = Colors.orange; });
+    isConnecting = true;
+    if (mounted) setState(() { connectionStatus = "جاري مسح الشبكة للاتصال التلقائي... 📡"; statusColor = Colors.orange; });
 
     try {
       final info = NetworkInfo();
       String? wifiIP = await info.getWifiIP();
       if (wifiIP == null || !wifiIP.contains('.')) {
-        if (mounted) setState(() { isConnecting = false; connectionStatus = "الآيباد غير متصل بالواي فاي!"; statusColor = Colors.red; });
+        isConnecting = false;
+        if (mounted) setState(() { connectionStatus = "في انتظار الاتصال عبر USB أو Wi-Fi..."; statusColor = Colors.grey; });
         return;
       }
       String subnet = wifiIP.substring(0, wifiIP.lastIndexOf('.'));
@@ -107,18 +124,21 @@ class _MainScreenState extends State<MainScreen> {
       for (int i = 1; i < 255; i++) {
         sweepTasks.add(
           Socket.connect('$subnet.$i', 8080, timeout: const Duration(milliseconds: 1000)).then((socket) {
-            if (!found) { 
-              found = true; setupConnection(socket, "الواي فاي 📶");
+            if (!found && !isConnected) { 
+              found = true; 
+              setupConnection(socket, "الواي فاي 📶");
             } else { socket.destroy(); }
           }).catchError((_) {})
         );
       }
       await Future.wait(sweepTasks).timeout(const Duration(milliseconds: 1500), onTimeout: () => []);
-      if (!found && mounted) {
-        setState(() { isConnecting = false; connectionStatus = "لم يتم العثور على الكمبيوتر!"; statusColor = Colors.red; });
+      
+      isConnecting = false;
+      if (!found && !isConnected && mounted) {
+        setState(() { connectionStatus = "لم يتم العثور على كمبيوتر، سأحاول مجدداً بصمت..."; statusColor = Colors.grey; });
       }
     } catch (e) {
-      if (mounted) setState(() { isConnecting = false; connectionStatus = "خطأ في الرادار!"; statusColor = Colors.red; });
+      isConnecting = false;
     }
   }
 
@@ -135,7 +155,12 @@ class _MainScreenState extends State<MainScreen> {
           sendCommand("SET_QUALITY:$streamQuality");
           sendCommand("SET_SENSITIVITY:$mouseSpeed");
           isHandshakeDone = true;
-          if (mounted) setState(() { isConnected = true; isConnecting = false; connectionStatus = "متصل بنجاح عبر $type"; statusColor = Colors.green; });
+          if (mounted) setState(() { 
+            isConnected = true; 
+            isConnecting = false; 
+            connectionStatus = "متصل بنجاح عبر $type"; 
+            statusColor = Colors.green; 
+          });
         }
         return;
       }
@@ -170,7 +195,6 @@ class _MainScreenState extends State<MainScreen> {
               if (isMonitorMode) {
                 currentFrame.value = frameData;
               }
-              // السطر السحري لحل مشكلة اختناق الـ USB والواي فاي
               sendCommand("FRAME_ACK"); 
           }
           
@@ -183,7 +207,12 @@ class _MainScreenState extends State<MainScreen> {
 
   void _handleDisconnect() {
     activeSocket?.close(); activeSocket = null; isHandshakeDone = false;
-    if (mounted) setState(() { isConnected = false; currentFrame.value = null; connectionStatus = "تم قطع الاتصال. جاهز للاتصال من جديد."; statusColor = Colors.grey; });
+    if (mounted) setState(() { 
+      isConnected = false; 
+      currentFrame.value = null; 
+      connectionStatus = "تم قطع الاتصال. جاري إعادة البحث التلقائي..."; 
+      statusColor = Colors.grey; 
+    });
   }
 
   void sendCommand(String cmd) {
@@ -200,7 +229,12 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
-  void manualDisconnect() { sendCommand("K_SPACE"); _handleDisconnect(); }
+  void manualDisconnect() { 
+    if (activeSocket != null) {
+      sendCommand("K_SPACE"); 
+      _handleDisconnect(); 
+    }
+  }
 
   void _exitFullScreenMode() {
     setState(() {
@@ -297,7 +331,7 @@ class _MainScreenState extends State<MainScreen> {
             children: [
               Center(
                 child: !isConnected 
-                    ? const Text("الرجاء الاتصال بالكمبيوتر أولاً", style: TextStyle(color: Colors.white54, fontSize: 16))
+                    ? const Text("الرجاء الانتظار، جاري الاتصال...", style: TextStyle(color: Colors.white54, fontSize: 16))
                     : ValueListenableBuilder<Uint8List?>(
                         valueListenable: currentFrame,
                         builder: (context, frameData, child) {
@@ -444,28 +478,32 @@ class _MainScreenState extends State<MainScreen> {
             padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.3))),
             child: Column(
               children: [
-                const Text("إدارة الاتصال", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)), const SizedBox(height: 15),
-                if (!isConnected)
-                  ElevatedButton.icon(
-                    onPressed: isConnecting ? null : connectWifiAuto,
-                    icon: isConnecting ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Icon(Icons.wifi, color: Colors.white),
-                    label: Text(isConnecting ? 'جاري البحث...' : 'بحث واتصال بالواي فاي', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFB829EA), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 15), minimumSize: const Size(double.infinity, 55)),
-                  ),
+                const Text("حالة الاتصال المباشر", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
+                const SizedBox(height: 15),
+                // واجهة نظيفة جداً: فقط نص الحالة، بدون أزرار يدوية مزعجة!
+                Center(
+                  child: Text(
+                    connectionStatus, 
+                    textAlign: TextAlign.center, 
+                    style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 16)
+                  )
+                ),
+                const SizedBox(height: 15),
                 if (isConnected)
                   ElevatedButton.icon(
-                    onPressed: manualDisconnect,
-                    icon: const Icon(Icons.power_settings_new, color: Colors.white),
-                    label: const Text('قطع الاتصال', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 15), minimumSize: const Size(double.infinity, 55)),
+                    onPressed: () {
+                      manualDisconnect(); // زر احتياطي لعمل Refresh إذا رغب المستخدم
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم الفصل، جاري إعادة البحث... 🔄')));
+                    },
+                    icon: const Icon(Icons.refresh, color: Colors.white),
+                    label: const Text('إعادة تنشيط الاتصال', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF222533), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 10)),
                   ),
-                const SizedBox(height: 15),
-                const Text("ملاحظة: لـ USB، فقط اشبك السلك وسيتصل تلقائياً وبشكل فوري!", style: TextStyle(color: Colors.green, fontSize: 12)),
+                const SizedBox(height: 10),
+                const Text("التطبيق يعمل بنظام الاتصال التلقائي الصامت. اشبك سلك USB وسيتصل فوراً، أو افصله ليشبك واي فاي تلقائياً!", style: TextStyle(color: Colors.green, fontSize: 12), textAlign: TextAlign.center),
               ],
             ),
           ),
-          const SizedBox(height: 15),
-          Center(child: Text(connectionStatus, textAlign: TextAlign.center, style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 16))),
           const SizedBox(height: 25),
           Container(
             padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.3))),
