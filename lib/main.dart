@@ -194,7 +194,7 @@ class _MainScreenState extends State<MainScreen> {
 
   void sendCommand(String cmd) {
     if (activeSocket != null && isConnected) {
-      try { activeSocket!.write("$cmd\n"); } catch (e) { print('Error sending command: $e'); }
+      try { activeSocket!.write("$cmd\n"); } catch (e) {}
     }
   }
 
@@ -230,7 +230,7 @@ class _MainScreenState extends State<MainScreen> {
           double dx = details.localOffsetFromOrigin.dx - _lastLongPressOffset!.dx;
           double dy = details.localOffsetFromOrigin.dy - _lastLongPressOffset!.dy;
           _lastLongPressOffset = details.localOffsetFromOrigin;
-          sendCommand("M_MOVE:$dx:$dy");
+          sendCommand("M_MOVE:${dx}:${dy}");
         }
       },
       onLongPressEnd: (details) { _lastLongPressOffset = null; sendCommand("M_L_UP"); HapticFeedback.selectionClick(); },
@@ -344,18 +344,12 @@ class _MainScreenState extends State<MainScreen> {
                       String newChars = text.substring(_lastText.length);
                       for (int i = 0; i < newChars.length; i++) {
                         String char = newChars[i];
-                        if (char == " ") {
-                          sendCommand("K_SPACE");
-                        } else if (char == "\n") {
-                          sendCommand("K_ENTER");
-                        } else {
-                          sendCommand("K_TYPE:$char");
-                        }
+                        if (char == " ") sendCommand("K_SPACE"); 
+                        else if (char == "\n") sendCommand("K_ENTER"); 
+                        else sendCommand("K_TYPE:$char");
                       }
                     } else if (text.length < _lastText.length) {
-                      for (int i = 0; i < (_lastText.length - text.length); i++) {
-                        sendCommand("K_BACK");
-                      }
+                      for (int i = 0; i < (_lastText.length - text.length); i++) sendCommand("K_BACK"); 
                     }
                     _lastText = text;
                   },
@@ -373,7 +367,7 @@ class _MainScreenState extends State<MainScreen> {
                 else { _keyboardFocus.requestFocus(); SystemChannels.textInput.invokeMethod('TextInput.show'); }
                 HapticFeedback.lightImpact();
               },
-              child: Container(padding: const EdgeInsets.all(15), decoration: BoxDecoration(color: Colors.white.withAlpha(102), shape: BoxShape.circle, boxShadow: [BoxShadow(color: Colors.black.withAlpha(51), blurRadius: 10, offset: const Offset(0, 4))]), child: const Icon(Icons.keyboard, color: Colors.black, size: 28)),
+              child: Container(padding: const EdgeInsets.all(15), decoration: BoxDecoration(color: Colors.white.withOpacity(0.4), shape: BoxShape.circle, boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 10, offset: const Offset(0, 4))]), child: const Icon(Icons.keyboard, color: Colors.black, size: 28)),
             ),
           ),
 
@@ -393,9 +387,9 @@ class _MainScreenState extends State<MainScreen> {
                   duration: const Duration(milliseconds: 100),
                   padding: EdgeInsets.all(isToggleBtnTapped ? 12 : 15),
                   decoration: BoxDecoration(
-                    color: isToggleBtnTapped ? Colors.white.withAlpha(204) : const Color(0xFFB829EA).withAlpha(153), 
+                    color: isToggleBtnTapped ? Colors.white.withOpacity(0.8) : const Color(0xFFB829EA).withOpacity(0.6), 
                     shape: BoxShape.circle, 
-                    boxShadow: [BoxShadow(color: Colors.black.withAlpha(77), blurRadius: 10, offset: const Offset(0, 4))]
+                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 4))]
                   ), 
                   child: Icon(Icons.desktop_windows, color: isToggleBtnTapped ? Colors.black : Colors.white, size: isToggleBtnTapped ? 24 : 28)
                 ),
@@ -413,7 +407,7 @@ class _MainScreenState extends State<MainScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Container(
-            padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFB829EA).withAlpha(77))),
+            padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.3))),
             child: Column(
               children: [
                 const Text("إدارة الاتصال", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)), const SizedBox(height: 15),
@@ -444,7 +438,7 @@ class _MainScreenState extends State<MainScreen> {
           const SizedBox(height: 25),
 
           Container(
-            padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFB829EA).withAlpha(77))),
+            padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.3))),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
