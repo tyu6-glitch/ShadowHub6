@@ -20,7 +20,11 @@ class ShadowHubApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark().copyWith(scaffoldBackgroundColor: const Color(0xFF0B0C10)),
+      theme: ThemeData.dark().copyWith(
+        scaffoldBackgroundColor: const Color(0xFF0B0C10),
+        splashColor: const Color(0xFFB829EA).withOpacity(0.3), // لون تأثير اللمس
+        highlightColor: const Color(0xFFB829EA).withOpacity(0.1),
+      ),
       home: const MainScreen(),
     );
   }
@@ -72,10 +76,10 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   // ===========================================
-  // 1. الاتصال عبر USB (الآيباد ينتظر الكمبيوتر)
+  // 1. الاتصال عبر USB (تم تعديله ليدعم Android و iOS)
   // ===========================================
   Future<void> startUsbMode() async {
-    manualDisconnect(); // تنظيف أي اتصال سابق
+    manualDisconnect(); 
     setState(() {
       currentActiveMode = "usb";
       isConnecting = true;
@@ -84,7 +88,8 @@ class _MainScreenState extends State<MainScreen> {
     });
 
     try {
-      serverSocket = await ServerSocket.bind('127.0.0.1', 8080);
+      // InternetAddress.anyIPv4 يسمح للأندرويد (ADB) بالدخول للنفق
+      serverSocket = await ServerSocket.bind(InternetAddress.anyIPv4, 8080);
       serverSocket!.listen((Socket client) {
         setupConnection(client, "سلك USB 🚀");
       });
@@ -98,7 +103,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   // ===========================================
-  // 2. الاتصال عبر Wi-Fi (الآيباد يبحث عن الكمبيوتر)
+  // 2. الاتصال عبر Wi-Fi
   // ===========================================
   Future<void> startWifiMode() async {
     manualDisconnect();
@@ -113,7 +118,7 @@ class _MainScreenState extends State<MainScreen> {
       final info = NetworkInfo();
       String? wifiIP = await info.getWifiIP();
       if (wifiIP == null || !wifiIP.contains('.')) {
-        setState(() { isConnecting = false; connectionStatus = "الآيباد غير متصل بالواي فاي!"; statusColor = Colors.red; });
+        setState(() { isConnecting = false; connectionStatus = "الجهاز غير متصل بالواي فاي!"; statusColor = Colors.red; });
         return;
       }
       String subnet = wifiIP.substring(0, wifiIP.lastIndexOf('.'));
@@ -142,7 +147,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   // ===========================================
-  // إعداد وتجهيز الاتصال بعد النجاح
+  // إعداد وتجهيز الاتصال
   // ===========================================
   void setupConnection(Socket socket, String type) {
     activeSocket = socket;
@@ -236,7 +241,7 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
-  void _exitFullScreenMode() {
+  void _exitLandscapeMode() {
     setState(() { isMonitorMode = false; _currentIndex = 4; });
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -271,29 +276,54 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
+  // ===========================================
+  // واجهة Stream Deck المحدثة والاحترافية
+  // ===========================================
   Widget _buildStreamDeckScreen() {
     if (syncedApps.isEmpty) { return const Center(child: Text("لا توجد تطبيقات متزامنة.\nافتح برنامج الكمبيوتر واضغط 'مزامنة'.", textAlign: TextAlign.center, style: TextStyle(color: Colors.white54, fontSize: 16))); }
-    return GridView.builder(
-      padding: const EdgeInsets.only(top: 80, left: 20, right: 20, bottom: 20),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 5, childAspectRatio: 0.9, mainAxisSpacing: 20, crossAxisSpacing: 20),
-      itemCount: syncedApps.length,
-      itemBuilder: (context, index) {
-        final app = syncedApps[index];
-        bool hasIcon = app['icon'] != null && app['icon'].toString().isNotEmpty;
-        return GestureDetector(
-          onTap: () { sendCommand("LAUNCH:${app['path']}"); HapticFeedback.heavyImpact(); },
+    
+    return Stack(
+      children: [
+        GridView.builder(
+          padding: const EdgeInsets.only(top: 80, left: 20, right: 20, bottom: 20),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 5, childAspectRatio: 0.9, mainAxisSpacing: 20, crossAxisSpacing: 20),
+          itemCount: syncedApps.length,
+          itemBuilder: (context, index) {
+            final app = syncedApps[index];
+            bool hasIcon = app['icon'] != null && app['icon'].toString().isNotEmpty;
+            return Material(
+              color: const Color(0xFF15161E),
+              borderRadius: BorderRadius.circular(15),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(15),
+                onTap: () { sendCommand("LAUNCH:${app['path']}"); HapticFeedback.heavyImpact(); },
+                child: Container(
+                  decoration: BoxDecoration(borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.5)), boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 5)]),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      if (hasIcon) 
+                        ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.memory(base64Decode(app['icon']), width: 45, height: 45, fit: BoxFit.cover, gaplessPlayback: true)) 
+                      else 
+                        const Icon(Icons.apps, size: 45, color: Colors.white54),
+                      const SizedBox(height: 10), 
+                      Text(app['name'] ?? '', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+        // زر الخروج من وضع الـ Stream Deck
+        Positioned(
+          top: 20, left: 20, 
           child: Container(
-            decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.5)), boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 5)]),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                if (hasIcon) Image.memory(base64Decode(app['icon']), width: 45, height: 45, gaplessPlayback: true) else const Icon(Icons.apps, size: 45, color: Colors.white54),
-                const SizedBox(height: 10), Text(app['name'] ?? '', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
-              ],
-            ),
-          ),
-        );
-      },
+            decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(50)), 
+            child: IconButton(icon: const Icon(Icons.close, color: Colors.white, size: 30), onPressed: _exitLandscapeMode)
+          )
+        ),
+      ],
     );
   }
 
@@ -304,12 +334,13 @@ class _MainScreenState extends State<MainScreen> {
 
     Widget activeScreen;
 
-    if (isMonitorMode) {
+    if (isMonitorMode || _currentIndex == 0) {
+      // شاشة البث وشاشة الستريم ديك تأخذ الشاشة بالكامل بالعرض
       activeScreen = Scaffold(
         resizeToAvoidBottomInset: false, backgroundColor: Colors.black,
         body: SafeArea(
           left: false, right: false, top: false, bottom: false,
-          child: Stack(
+          child: _currentIndex == 0 ? _buildStreamDeckScreen() : Stack(
             children: [
               Center(
                 child: !isConnected 
@@ -322,7 +353,7 @@ class _MainScreenState extends State<MainScreen> {
                         },
                       ),
               ),
-              Positioned(top: 20, left: 20, child: Container(decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(50)), child: IconButton(icon: const Icon(Icons.close, color: Colors.white, size: 30), onPressed: _exitFullScreenMode))),
+              Positioned(top: 20, left: 20, child: Container(decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(50)), child: IconButton(icon: const Icon(Icons.close, color: Colors.white, size: 30), onPressed: _exitLandscapeMode))),
             ],
           ),
         ),
@@ -331,17 +362,18 @@ class _MainScreenState extends State<MainScreen> {
       activeScreen = Scaffold(
         resizeToAvoidBottomInset: false, 
         appBar: AppBar(backgroundColor: const Color(0xFF15161E), title: const Text('ShadowHub', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), centerTitle: true),
-        body: IndexedStack(index: _currentIndex, children: [_buildStreamDeckScreen(), _buildMediaScreen(), _buildMouseScreen(), const SizedBox(), _buildSettingsScreen()]),
+        body: IndexedStack(index: _currentIndex, children: [const SizedBox(), _buildMediaScreen(), _buildMouseScreen(), const SizedBox(), _buildSettingsScreen()]),
         bottomNavigationBar: BottomNavigationBar(
           backgroundColor: const Color(0xFF15161E), selectedItemColor: const Color(0xFFB829EA), unselectedItemColor: const Color(0xFF888B94), type: BottomNavigationBarType.fixed, currentIndex: _currentIndex,
           onTap: (index) {
-            if (index == 0) {
+            if (index == 0 || index == 3) {
               setState(() => _currentIndex = index); 
+              if(index == 3) setState(() { isMonitorMode = true; });
               SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]); SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-            } else if (index == 3) {
-              setState(() { isMonitorMode = true; });
-              SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]); SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-            } else { setState(() => _currentIndex = index); }
+            } else { 
+              setState(() { _currentIndex = index; isMonitorMode = false; }); 
+              SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]); SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+            }
           },
           items: const [BottomNavigationBarItem(icon: Icon(Icons.apps), label: 'StreamDeck'), BottomNavigationBarItem(icon: Icon(Icons.music_note), label: 'الميديا'), BottomNavigationBarItem(icon: Icon(Icons.mouse), label: 'الماوس'), BottomNavigationBarItem(icon: Icon(Icons.monitor), label: 'الشاشة'), BottomNavigationBarItem(icon: Icon(Icons.settings), label: 'الإعدادات')],
         ),
@@ -382,16 +414,17 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
           
+          // القائمة العائمة (أصبحت شفافة وأنيقة)
           if (isMonitorMode || _currentIndex == 0 || _currentIndex == 1)
             Positioned(
-              top: isMonitorMode ? 20 : 60, right: 20,
+              top: isMonitorMode || _currentIndex == 0 ? 20 : 60, right: 20,
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   if (_isQuickBarOpen)
                     Container(
                       margin: const EdgeInsets.only(right: 10), padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 0),
-                      decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(25), border: Border.all(color: const Color(0xFFB829EA), width: 1.5), boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 10)]),
+                      decoration: BoxDecoration(color: const Color(0xFF15161E).withOpacity(0.8), borderRadius: BorderRadius.circular(25), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.5), width: 1.5), boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10)]),
                       child: Row(
                         children: [
                           IconButton(icon: const Icon(Icons.monitor, color: Colors.white70, size: 22), tooltip: 'تبديل الشاشة', onPressed: () { sendCommand("TOGGLE_SCREEN"); HapticFeedback.heavyImpact(); }),
@@ -401,7 +434,8 @@ class _MainScreenState extends State<MainScreen> {
                       ),
                     ),
                   FloatingActionButton(
-                    mini: true, backgroundColor: _isQuickBarOpen ? const Color(0xFF222533) : const Color(0xFFB829EA),
+                    mini: true, elevation: 0,
+                    backgroundColor: _isQuickBarOpen ? const Color(0xFF222533).withOpacity(0.7) : const Color(0xFFB829EA).withOpacity(0.6),
                     onPressed: () => setState(() => _isQuickBarOpen = !_isQuickBarOpen), child: Icon(_isQuickBarOpen ? Icons.close : Icons.bolt, color: Colors.white),
                   ),
                 ],
@@ -430,8 +464,6 @@ class _MainScreenState extends State<MainScreen> {
                 const SizedBox(height: 15),
                 Text(connectionStatus, textAlign: TextAlign.center, style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 14)),
                 const SizedBox(height: 20),
-                
-                // أزرار التحكم الصريح (اختيارك الذكي)
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -440,11 +472,7 @@ class _MainScreenState extends State<MainScreen> {
                         onPressed: (isConnected && currentActiveMode == "wifi") ? null : startWifiMode,
                         icon: const Icon(Icons.wifi, color: Colors.white),
                         label: const Text('Wi-Fi', style: TextStyle(fontSize: 16)),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: currentActiveMode == "wifi" ? Colors.green : const Color(0xFF222533),
-                          foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))
-                        ),
+                        style: ElevatedButton.styleFrom(backgroundColor: currentActiveMode == "wifi" ? Colors.green : const Color(0xFF222533), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                       ),
                     ),
                     const SizedBox(width: 15),
@@ -453,11 +481,7 @@ class _MainScreenState extends State<MainScreen> {
                         onPressed: (isConnected && currentActiveMode == "usb") ? null : startUsbMode,
                         icon: const Icon(Icons.usb, color: Colors.white),
                         label: const Text('USB', style: TextStyle(fontSize: 16)),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: currentActiveMode == "usb" ? const Color(0xFFB829EA) : const Color(0xFF222533),
-                          foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))
-                        ),
+                        style: ElevatedButton.styleFrom(backgroundColor: currentActiveMode == "usb" ? const Color(0xFFB829EA) : const Color(0xFF222533), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                       ),
                     ),
                   ],
@@ -465,9 +489,7 @@ class _MainScreenState extends State<MainScreen> {
                 if (isConnected) ...[
                   const SizedBox(height: 15),
                   ElevatedButton.icon(
-                    onPressed: manualDisconnect,
-                    icon: const Icon(Icons.power_settings_new, color: Colors.white),
-                    label: const Text('قطع الاتصال', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                    onPressed: manualDisconnect, icon: const Icon(Icons.power_settings_new, color: Colors.white), label: const Text('قطع الاتصال', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                     style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 10)),
                   ),
                 ]
@@ -494,6 +516,9 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
+  // ===========================================
+  // واجهة الميديا (تأثير اللمس / الأنيميشن)
+  // ===========================================
   Widget _buildMediaScreen() {
     return GridView.count(
       crossAxisCount: 3, childAspectRatio: 1.2, padding: const EdgeInsets.all(15), mainAxisSpacing: 15, crossAxisSpacing: 15, 
@@ -504,16 +529,81 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  Widget _buildMediaBtn(String t, IconData i, String c) { return GestureDetector(onTap: () { sendCommand(c); HapticFeedback.lightImpact(); }, child: Container(decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15)), child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(i, size: 28, color: const Color(0xFFB829EA)), const SizedBox(height: 8), Text(t, style: const TextStyle(fontSize: 12), textAlign: TextAlign.center)]))); }
-  Widget _buildContinuousMediaBtn(String t, IconData i, String c) { return GestureDetector(onTapDown: (_) { sendCommand(c); HapticFeedback.lightImpact(); _volumeTimer = Timer.periodic(const Duration(milliseconds: 150), (timer) { sendCommand(c); }); }, onTapUp: (_) => _volumeTimer?.cancel(), onTapCancel: () => _volumeTimer?.cancel(), child: Container(decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15)), child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(i, size: 28, color: const Color(0xFFB829EA)), const SizedBox(height: 8), Text(t, style: const TextStyle(fontSize: 12), textAlign: TextAlign.center)]))); }
+  Widget _buildMediaBtn(String t, IconData i, String c) { 
+    return Material(
+      color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(15),
+        onTap: () { sendCommand(c); HapticFeedback.lightImpact(); }, 
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(i, size: 28, color: const Color(0xFFB829EA)), const SizedBox(height: 8), Text(t, style: const TextStyle(fontSize: 12), textAlign: TextAlign.center)])
+      )
+    ); 
+  }
+  
+  Widget _buildContinuousMediaBtn(String t, IconData i, String c) { 
+    return Material(
+      color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(15),
+        onTapDown: (_) { sendCommand(c); HapticFeedback.lightImpact(); _volumeTimer = Timer.periodic(const Duration(milliseconds: 150), (timer) { sendCommand(c); }); }, 
+        onTapUp: (_) => _volumeTimer?.cancel(), onTapCancel: () => _volumeTimer?.cancel(), 
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(i, size: 28, color: const Color(0xFFB829EA)), const SizedBox(height: 8), Text(t, style: const TextStyle(fontSize: 12), textAlign: TextAlign.center)])
+      )
+    ); 
+  }
 
+  // ===========================================
+  // واجهة لوحة اللمس (كأنها لابتوب)
+  // ===========================================
   Widget _buildMouseScreen() {
-    return Column(
-      children: [
-        Expanded(child: _buildGestureArea(child: Container(margin: const EdgeInsets.all(20), decoration: BoxDecoration(border: Border.all(color: const Color(0xFFB829EA), width: 2), borderRadius: BorderRadius.circular(20), color: const Color(0xFF15161E)), child: const Center(child: Text('إصبع واحد للتحريك\nإصبعين للتمرير (سكرول)\nلمسة واحدة للنقر\nضغطة مطولة مع السحب للتحديد', textAlign: TextAlign.center, style: TextStyle(color: Colors.white70, fontSize: 16)))))),
-        Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [_mouseBtn('يسار', 'M_L_DOWN', 'M_L_UP'), _mouseBtn('يمين', 'M_R_DOWN', 'M_R_UP')]), const SizedBox(height: 80), 
-      ],
+    return Padding(
+      padding: const EdgeInsets.all(20.0),
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E1F29), // لون فاتح قليلاً لتبدو كلوحة لمس
+          borderRadius: BorderRadius.circular(15),
+          boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 5))]
+        ),
+        child: Column(
+          children: [
+            Expanded(
+              child: _buildGestureArea(
+                child: Container(
+                  color: Colors.transparent, width: double.infinity,
+                  child: const Center(
+                    child: Text('إصبع واحد للتحريك\nإصبعين للتمرير (سكرول)\nلمسة واحدة للنقر\nضغطة مطولة مع السحب للتحديد', 
+                    textAlign: TextAlign.center, style: TextStyle(color: Colors.white30, fontSize: 16))
+                  )
+                )
+              )
+            ),
+            Container(height: 1, color: Colors.white12), // خط فاصل بين اللمس والأزرار
+            Row(
+              children: [
+                Expanded(child: _mouseBtn('يسار', 'M_L_DOWN', 'M_L_UP', true)),
+                Container(width: 1, height: 50, color: Colors.white12), // خط فاصل بين الزرين
+                Expanded(child: _mouseBtn('يمين', 'M_R_DOWN', 'M_R_UP', false)),
+              ]
+            )
+          ],
+        ),
+      ),
     );
   }
-  Widget _mouseBtn(String t, String down, String up) { return GestureDetector(onTapDown: (_) => sendCommand(down), onTapUp: (_) => sendCommand(up), child: Container(padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 20), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(10)), child: Text(t, style: const TextStyle(fontSize: 16)))); }
+  
+  Widget _mouseBtn(String t, String down, String up, bool isLeft) { 
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.only(bottomLeft: Radius.circular(isLeft ? 15 : 0), bottomRight: Radius.circular(isLeft ? 0 : 15)),
+      child: InkWell(
+        borderRadius: BorderRadius.only(bottomLeft: Radius.circular(isLeft ? 15 : 0), bottomRight: Radius.circular(isLeft ? 0 : 15)),
+        onTapDown: (_) { sendCommand(down); HapticFeedback.selectionClick(); }, 
+        onTapUp: (_) => sendCommand(up), onTapCancel: () => sendCommand(up),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 15), 
+          child: Center(child: Text(t, style: const TextStyle(fontSize: 14, color: Colors.white70, fontWeight: FontWeight.bold)))
+        )
+      )
+    ); 
+  }
 }
