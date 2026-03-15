@@ -68,6 +68,7 @@ class _MainScreenState extends State<MainScreen> {
   bool isToggleBtnTapped = false;
 
   Offset? _lastLongPressOffset;
+  Timer? _volumeTimer;
 
   @override
   void initState() {
@@ -77,6 +78,7 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   void dispose() {
+    _volumeTimer?.cancel();
     activeSocket?.close();
     serverSocket?.close();
     super.dispose();
@@ -483,10 +485,12 @@ class _MainScreenState extends State<MainScreen> {
       children: [
         _buildMediaBtn('كتم الصوت', Icons.volume_off, 'VOL_MUTE'), 
         _buildMediaBtn('إيقاف/تشغيل', Icons.play_arrow, 'MEDIA_PLAY_PAUSE'), 
-        _buildMediaBtn('رفع الصوت', Icons.volume_up, 'VOL_UP'), 
+        // استخدام الدالة الجديدة للضغط المستمر لرفع الصوت
+        _buildContinuousMediaBtn('رفع الصوت', Icons.volume_up, 'VOL_UP'), 
         _buildMediaBtn('المقطع السابق', Icons.skip_previous, 'MEDIA_PREV'), 
         _buildMediaBtn('المقطع التالي', Icons.skip_next, 'MEDIA_NEXT'), 
-        _buildMediaBtn('خفض الصوت', Icons.volume_down, 'VOL_DOWN')
+        // استخدام الدالة الجديدة للضغط المستمر لخفض الصوت
+        _buildContinuousMediaBtn('خفض الصوت', Icons.volume_down, 'VOL_DOWN')
       ]
     );
   }
@@ -494,6 +498,33 @@ class _MainScreenState extends State<MainScreen> {
   Widget _buildMediaBtn(String t, IconData i, String c) {
     return GestureDetector(
       onTap: () { sendCommand(c); HapticFeedback.lightImpact(); }, 
+      child: Container(
+        decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15)), 
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center, 
+          children: [
+            Icon(i, size: 28, color: const Color(0xFFB829EA)), 
+            const SizedBox(height: 8),
+            Text(t, style: const TextStyle(fontSize: 12), textAlign: TextAlign.center)
+          ]
+        )
+      )
+    );
+  }
+
+  // الدالة الجديدة (للضغط المستمر)
+  Widget _buildContinuousMediaBtn(String t, IconData i, String c) {
+    return GestureDetector(
+      onTapDown: (_) {
+        sendCommand(c); // إرسال الأمر فوراً عند اللمس
+        HapticFeedback.lightImpact();
+        // تشغيل مؤقت يرسل الأمر كل 150 جزء من الثانية طالما الإصبع موجود
+        _volumeTimer = Timer.periodic(const Duration(milliseconds: 150), (timer) {
+          sendCommand(c);
+        });
+      },
+      onTapUp: (_) => _volumeTimer?.cancel(), // إيقاف عند رفع الإصبع
+      onTapCancel: () => _volumeTimer?.cancel(), // إيقاف عند سحب الإصبع خارج الزر
       child: Container(
         decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15)), 
         child: Column(
