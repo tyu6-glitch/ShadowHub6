@@ -34,7 +34,7 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> {
   int _currentIndex = 4;
-  List<Map<String, dynamic>> syncedApps = []; // تخزين تطبيقات الستريم دك القادمة من البايثون
+  List<Map<String, dynamic>> syncedApps = []; 
   
   final TextEditingController _keyboardController = TextEditingController();
   final FocusNode _keyboardFocus = FocusNode();
@@ -42,7 +42,7 @@ class _MainScreenState extends State<MainScreen> {
 
   bool isMonitorMode = false; 
   bool isConnecting = false;
-  bool _isQuickBarOpen = false; // الشريط العائم
+  bool _isQuickBarOpen = false;
 
   String connectionStatus = "جاهز للاتصال - اشبك USB أو ابحث بالواي فاي";
   Color statusColor = Colors.grey;
@@ -57,14 +57,6 @@ class _MainScreenState extends State<MainScreen> {
   List<int> dataBuffer = [];
   int expectedFrameLength = 0;
   bool isHandshakeDone = false;
-
-  double floatingX = 20.0;
-  double floatingY = 100.0;
-  double savedPortraitX = 20.0;
-  double savedPortraitY = 100.0;
-  double toggleBtnX = 20.0;
-  double toggleBtnY = 180.0;
-  bool isToggleBtnTapped = false;
 
   Offset? _lastLongPressOffset;
   Timer? _volumeTimer;
@@ -160,7 +152,6 @@ class _MainScreenState extends State<MainScreen> {
         if (expectedFrameLength > 0 && dataBuffer.length >= expectedFrameLength) {
           var frameData = Uint8List.fromList(dataBuffer.sublist(0, expectedFrameLength));
           
-          // --- استقبال حزمة المزامنة (JSON) لتطبيقات الستريم دك ---
           if (frameData.length > 10 && 
               frameData[0] == 83 && frameData[1] == 89 && frameData[2] == 78 && frameData[3] == 67 &&
               frameData[4] == 95 && frameData[5] == 74 && frameData[6] == 83 && frameData[7] == 79 &&
@@ -175,7 +166,6 @@ class _MainScreenState extends State<MainScreen> {
                   }
               } catch (e) {}
           } else {
-              // استقبال الصور العادية
               if (isMonitorMode) currentFrame.value = frameData;
           }
           
@@ -201,7 +191,6 @@ class _MainScreenState extends State<MainScreen> {
 
   void _exitFullScreenMode() {
     setState(() {
-      if (isMonitorMode) { floatingX = savedPortraitX; floatingY = savedPortraitY; }
       isMonitorMode = false; _currentIndex = 4; 
     });
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
@@ -231,9 +220,6 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  // ===========================================
-  // واجهة ستريم دك (مبنية على التطبيقات المزمنة)
-  // ===========================================
   Widget _buildStreamDeckScreen() {
     if (syncedApps.isEmpty) {
       return const Center(child: Text("لا توجد تطبيقات متزامنة.\nافتح برنامج الكمبيوتر واضغط 'مزامنة'.", textAlign: TextAlign.center, style: TextStyle(color: Colors.white54, fontSize: 16)));
@@ -280,12 +266,6 @@ class _MainScreenState extends State<MainScreen> {
   Widget build(BuildContext context) {
     double keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
     bool isKeyboardOpen = keyboardHeight > 0;
-    double screenHeight = MediaQuery.of(context).size.height;
-    double safeFloatingY = floatingY;
-    if (isKeyboardOpen) {
-      double maxSafeY = screenHeight - keyboardHeight - 80; 
-      if (safeFloatingY > maxSafeY) safeFloatingY = maxSafeY;
-    }
 
     Widget activeScreen;
 
@@ -325,7 +305,7 @@ class _MainScreenState extends State<MainScreen> {
               SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
               SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
             } else if (index == 3) {
-              setState(() { isMonitorMode = true; savedPortraitX = floatingX; savedPortraitY = floatingY; floatingX = 20.0; floatingY = 100.0; });
+              setState(() { isMonitorMode = true; });
               SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
               SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
             } else { setState(() => _currentIndex = index); }
@@ -375,39 +355,10 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
           
-          Positioned(
-            left: floatingX, top: safeFloatingY, 
-            child: GestureDetector(
-              onPanUpdate: (details) { setState(() { floatingX += details.delta.dx; floatingY += details.delta.dy; }); },
-              onTap: () {
-                if (isKeyboardOpen || _keyboardFocus.hasFocus) { _keyboardFocus.unfocus(); SystemChannels.textInput.invokeMethod('TextInput.hide'); } 
-                else { _keyboardFocus.requestFocus(); SystemChannels.textInput.invokeMethod('TextInput.show'); }
-                HapticFeedback.lightImpact();
-              },
-              child: Container(padding: const EdgeInsets.all(15), decoration: BoxDecoration(color: Colors.white.withOpacity(0.4), shape: BoxShape.circle, boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 10, offset: const Offset(0, 4))]), child: const Icon(Icons.keyboard, color: Colors.black, size: 28)),
-            ),
-          ),
-
-          if (isMonitorMode)
-            Positioned(
-              left: toggleBtnX, top: toggleBtnY, 
-              child: GestureDetector(
-                onPanUpdate: (details) { setState(() { toggleBtnX += details.delta.dx; toggleBtnY += details.delta.dy; }); },
-                onTapDown: (_) => setState(() => isToggleBtnTapped = true),
-                onTapUp: (_) { setState(() => isToggleBtnTapped = false); sendCommand("TOGGLE_SCREEN"); HapticFeedback.heavyImpact(); },
-                onTapCancel: () => setState(() => isToggleBtnTapped = false),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 100), padding: EdgeInsets.all(isToggleBtnTapped ? 12 : 15),
-                  decoration: BoxDecoration(color: isToggleBtnTapped ? Colors.white.withOpacity(0.8) : const Color(0xFFB829EA).withOpacity(0.6), shape: BoxShape.circle, boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 4))]), 
-                  child: Icon(Icons.desktop_windows, color: isToggleBtnTapped ? Colors.black : Colors.white, size: isToggleBtnTapped ? 24 : 28)
-                ),
-              ),
-            ),
-
           // ===========================================
-          // الشريط العلوي العائم للاختصارات السريعة
+          // الشريط العلوي العائم (يظهر في الشاشة 3، الستريم دك 0، والميديا 1)
           // ===========================================
-          if (isMonitorMode || _currentIndex == 0 || _currentIndex == 2)
+          if (isMonitorMode || _currentIndex == 0 || _currentIndex == 1)
             Positioned(
               top: isMonitorMode ? 20 : 60,
               right: 20,
@@ -425,11 +376,24 @@ class _MainScreenState extends State<MainScreen> {
                       ),
                       child: Row(
                         children: [
+                          IconButton(
+                            icon: const Icon(Icons.switch_video, color: Colors.white70, size: 22),
+                            tooltip: 'تبديل الشاشة المعروضة',
+                            onPressed: () { sendCommand("TOGGLE_SCREEN"); HapticFeedback.heavyImpact(); },
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.keyboard, color: Colors.white70, size: 22),
+                            tooltip: 'إظهار/إخفاء الكيبورد',
+                            onPressed: () {
+                              if (isKeyboardOpen || _keyboardFocus.hasFocus) { FocusManager.instance.primaryFocus?.unfocus(); SystemChannels.textInput.invokeMethod('TextInput.hide'); } 
+                              else { _keyboardFocus.requestFocus(); SystemChannels.textInput.invokeMethod('TextInput.show'); }
+                              HapticFeedback.lightImpact();
+                            },
+                          ),
                           _quickBtn(Icons.copy, 'نسخ', 'HOTKEY:ctrl+c'),
                           _quickBtn(Icons.paste, 'لصق', 'HOTKEY:ctrl+v'),
                           _quickBtn(Icons.cut, 'قص', 'HOTKEY:ctrl+x'),
                           _quickBtn(Icons.undo, 'تراجع', 'HOTKEY:ctrl+z'),
-                          _quickBtn(Icons.desktop_windows, 'سطح المكتب', 'HOTKEY:win+d'),
                         ],
                       ),
                     ),
