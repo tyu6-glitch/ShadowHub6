@@ -44,8 +44,9 @@ class _MainScreenState extends State<MainScreen> {
   bool isConnecting = false;
   bool _isQuickBarOpen = false;
 
-  String connectionStatus = "جاري البحث عن الكمبيوتر بصمت... 🔍";
-  Color statusColor = Colors.orange;
+  String connectionStatus = "اختر طريقة الاتصال للبدء 👇";
+  Color statusColor = Colors.white;
+  String currentActiveMode = "none"; // usb, wifi, none
   
   double mouseSpeed = 4.0;
   double streamQuality = 75.0;
@@ -60,61 +61,59 @@ class _MainScreenState extends State<MainScreen> {
 
   Offset? _lastLongPressOffset;
   Timer? _volumeTimer;
-  Timer? _autoConnectTimer; // مؤقت الاتصال الصامت
   int _lastMouseSendTime = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    startUsbServer(); 
-    _startAutoConnectLoop(); // بدء السحر الصامت فور فتح التطبيق
-  }
 
   @override
   void dispose() {
     _volumeTimer?.cancel();
-    _autoConnectTimer?.cancel();
     activeSocket?.close();
     serverSocket?.close();
     super.dispose();
   }
 
   // ===========================================
-  // نظام الاتصال السحري الصامت (Zero-Config)
+  // 1. الاتصال عبر USB (الآيباد ينتظر الكمبيوتر)
   // ===========================================
-  void _startAutoConnectLoop() {
-    _autoConnectTimer = Timer.periodic(const Duration(seconds: 4), (timer) {
-      if (!isConnected && !isConnecting) {
-        // إذا لم يكن متصلاً، سيقوم بصمت بمسح شبكة الواي فاي (الـ USB يستمع دائماً في الخلفية)
-        _silentWifiSweep();
-      }
+  Future<void> startUsbMode() async {
+    manualDisconnect(); // تنظيف أي اتصال سابق
+    setState(() {
+      currentActiveMode = "usb";
+      isConnecting = true;
+      connectionStatus = "جاري انتظار الكمبيوتر عبر سلك USB ⏳...";
+      statusColor = Colors.orange;
     });
-  }
 
-  Future<void> startUsbServer() async {
     try {
-      serverSocket?.close();
       serverSocket = await ServerSocket.bind('127.0.0.1', 8080);
       serverSocket!.listen((Socket client) {
-        if (activeSocket != null) { manualDisconnect(); }
-        setupConnection(client, "USB الخارق 🚀");
+        setupConnection(client, "سلك USB 🚀");
       });
     } catch (e) {
-      debugPrint("USB Error: $e");
+      setState(() {
+        isConnecting = false;
+        connectionStatus = "فشل تشغيل خادم USB. أعد المحاولة.";
+        statusColor = Colors.red;
+      });
     }
   }
 
-  Future<void> _silentWifiSweep() async {
-    if (isConnected) return;
-    isConnecting = true;
-    if (mounted) setState(() { connectionStatus = "جاري مسح الشبكة للاتصال التلقائي... 📡"; statusColor = Colors.orange; });
+  // ===========================================
+  // 2. الاتصال عبر Wi-Fi (الآيباد يبحث عن الكمبيوتر)
+  // ===========================================
+  Future<void> startWifiMode() async {
+    manualDisconnect();
+    setState(() {
+      currentActiveMode = "wifi";
+      isConnecting = true;
+      connectionStatus = "جاري مسح شبكة الـ Wi-Fi للبحث عن الكمبيوتر 📡...";
+      statusColor = Colors.orange;
+    });
 
     try {
       final info = NetworkInfo();
       String? wifiIP = await info.getWifiIP();
       if (wifiIP == null || !wifiIP.contains('.')) {
-        isConnecting = false;
-        if (mounted) setState(() { connectionStatus = "في انتظار الاتصال عبر USB أو Wi-Fi..."; statusColor = Colors.grey; });
+        setState(() { isConnecting = false; connectionStatus = "الآيباد غير متصل بالواي فاي!"; statusColor = Colors.red; });
         return;
       }
       String subnet = wifiIP.substring(0, wifiIP.lastIndexOf('.'));
@@ -123,25 +122,28 @@ class _MainScreenState extends State<MainScreen> {
       
       for (int i = 1; i < 255; i++) {
         sweepTasks.add(
-          Socket.connect('$subnet.$i', 8080, timeout: const Duration(milliseconds: 1000)).then((socket) {
+          Socket.connect('$subnet.$i', 8080, timeout: const Duration(milliseconds: 1500)).then((socket) {
             if (!found && !isConnected) { 
               found = true; 
-              setupConnection(socket, "الواي فاي 📶");
+              setupConnection(socket, "الـ Wi-Fi 📶");
             } else { socket.destroy(); }
           }).catchError((_) {})
         );
       }
-      await Future.wait(sweepTasks).timeout(const Duration(milliseconds: 1500), onTimeout: () => []);
       
-      isConnecting = false;
-      if (!found && !isConnected && mounted) {
-        setState(() { connectionStatus = "لم يتم العثور على كمبيوتر، سأحاول مجدداً بصمت..."; statusColor = Colors.grey; });
+      await Future.wait(sweepTasks).timeout(const Duration(milliseconds: 2000), onTimeout: () => []);
+      
+      if (!found && mounted && !isConnected) {
+        setState(() { isConnecting = false; connectionStatus = "لم يتم العثور على الكمبيوتر في الشبكة."; statusColor = Colors.red; });
       }
     } catch (e) {
-      isConnecting = false;
+      setState(() { isConnecting = false; connectionStatus = "حدث خطأ أثناء البحث."; statusColor = Colors.red; });
     }
   }
 
+  // ===========================================
+  // إعداد وتجهيز الاتصال بعد النجاح
+  // ===========================================
   void setupConnection(Socket socket, String type) {
     activeSocket = socket;
     activeSocket!.setOption(SocketOption.tcpNoDelay, true);
@@ -158,7 +160,7 @@ class _MainScreenState extends State<MainScreen> {
           if (mounted) setState(() { 
             isConnected = true; 
             isConnecting = false; 
-            connectionStatus = "متصل بنجاح عبر $type"; 
+            connectionStatus = "متصل بنجاح عبر $type ✅"; 
             statusColor = Colors.green; 
           });
         }
@@ -188,16 +190,13 @@ class _MainScreenState extends State<MainScreen> {
                   List<dynamic> parsedApps = jsonDecode(jsonStr);
                   if (mounted) {
                     setState(() { syncedApps = List<Map<String, dynamic>>.from(parsedApps); });
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم مزامنة التطبيقات بنجاح! 🚀'), backgroundColor: Colors.green));
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم مزامنة التطبيقات! 🚀'), backgroundColor: Colors.green));
                   }
               } catch (e) {}
           } else {
-              if (isMonitorMode) {
-                currentFrame.value = frameData;
-              }
+              if (isMonitorMode) { currentFrame.value = frameData; }
               sendCommand("FRAME_ACK"); 
           }
-          
           dataBuffer.removeRange(0, expectedFrameLength);
           expectedFrameLength = 0; 
         } else { break; }
@@ -206,13 +205,21 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   void _handleDisconnect() {
-    activeSocket?.close(); activeSocket = null; isHandshakeDone = false;
+    activeSocket?.close(); activeSocket = null; 
+    serverSocket?.close(); serverSocket = null;
+    isHandshakeDone = false;
     if (mounted) setState(() { 
-      isConnected = false; 
+      isConnected = false; isConnecting = false;
       currentFrame.value = null; 
-      connectionStatus = "تم قطع الاتصال. جاري إعادة البحث التلقائي..."; 
+      connectionStatus = "تم قطع الاتصال. يرجى اختيار طريقة للاتصال."; 
       statusColor = Colors.grey; 
+      currentActiveMode = "none";
     });
+  }
+
+  void manualDisconnect() { 
+    if (activeSocket != null) { sendCommand("K_SPACE"); }
+    _handleDisconnect(); 
   }
 
   void sendCommand(String cmd) {
@@ -229,17 +236,8 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
-  void manualDisconnect() { 
-    if (activeSocket != null) {
-      sendCommand("K_SPACE"); 
-      _handleDisconnect(); 
-    }
-  }
-
   void _exitFullScreenMode() {
-    setState(() {
-      isMonitorMode = false; _currentIndex = 4; 
-    });
+    setState(() { isMonitorMode = false; _currentIndex = 4; });
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   }
@@ -274,39 +272,23 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Widget _buildStreamDeckScreen() {
-    if (syncedApps.isEmpty) {
-      return const Center(child: Text("لا توجد تطبيقات متزامنة.\nافتح برنامج الكمبيوتر واضغط 'مزامنة'.", textAlign: TextAlign.center, style: TextStyle(color: Colors.white54, fontSize: 16)));
-    }
+    if (syncedApps.isEmpty) { return const Center(child: Text("لا توجد تطبيقات متزامنة.\nافتح برنامج الكمبيوتر واضغط 'مزامنة'.", textAlign: TextAlign.center, style: TextStyle(color: Colors.white54, fontSize: 16))); }
     return GridView.builder(
       padding: const EdgeInsets.only(top: 80, left: 20, right: 20, bottom: 20),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 5, childAspectRatio: 0.9, mainAxisSpacing: 20, crossAxisSpacing: 20,
-      ),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 5, childAspectRatio: 0.9, mainAxisSpacing: 20, crossAxisSpacing: 20),
       itemCount: syncedApps.length,
       itemBuilder: (context, index) {
         final app = syncedApps[index];
         bool hasIcon = app['icon'] != null && app['icon'].toString().isNotEmpty;
         return GestureDetector(
-          onTap: () {
-            sendCommand("LAUNCH:${app['path']}");
-            HapticFeedback.heavyImpact();
-          },
+          onTap: () { sendCommand("LAUNCH:${app['path']}"); HapticFeedback.heavyImpact(); },
           child: Container(
-            decoration: BoxDecoration(
-              color: const Color(0xFF15161E),
-              borderRadius: BorderRadius.circular(15),
-              border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.5)),
-              boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 5)]
-            ),
+            decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.5)), boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 5)]),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                if (hasIcon)
-                  Image.memory(base64Decode(app['icon']), width: 45, height: 45, gaplessPlayback: true)
-                else
-                  const Icon(Icons.apps, size: 45, color: Colors.white54),
-                const SizedBox(height: 10),
-                Text(app['name'] ?? '', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
+                if (hasIcon) Image.memory(base64Decode(app['icon']), width: 45, height: 45, gaplessPlayback: true) else const Icon(Icons.apps, size: 45, color: Colors.white54),
+                const SizedBox(height: 10), Text(app['name'] ?? '', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
               ],
             ),
           ),
@@ -331,7 +313,7 @@ class _MainScreenState extends State<MainScreen> {
             children: [
               Center(
                 child: !isConnected 
-                    ? const Text("الرجاء الانتظار، جاري الاتصال...", style: TextStyle(color: Colors.white54, fontSize: 16))
+                    ? const Text("لا يوجد اتصال بالكمبيوتر.", style: TextStyle(color: Colors.white54, fontSize: 16))
                     : ValueListenableBuilder<Uint8List?>(
                         valueListenable: currentFrame,
                         builder: (context, frameData, child) {
@@ -355,19 +337,13 @@ class _MainScreenState extends State<MainScreen> {
           onTap: (index) {
             if (index == 0) {
               setState(() => _currentIndex = index); 
-              SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
-              SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+              SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]); SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
             } else if (index == 3) {
               setState(() { isMonitorMode = true; });
-              SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
-              SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+              SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]); SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
             } else { setState(() => _currentIndex = index); }
           },
-          items: const [
-            BottomNavigationBarItem(icon: Icon(Icons.apps), label: 'StreamDeck'), BottomNavigationBarItem(icon: Icon(Icons.music_note), label: 'الميديا'),
-            BottomNavigationBarItem(icon: Icon(Icons.mouse), label: 'الماوس'), BottomNavigationBarItem(icon: Icon(Icons.monitor), label: 'الشاشة'),
-            BottomNavigationBarItem(icon: Icon(Icons.settings), label: 'الإعدادات'),
-          ],
+          items: const [BottomNavigationBarItem(icon: Icon(Icons.apps), label: 'StreamDeck'), BottomNavigationBarItem(icon: Icon(Icons.music_note), label: 'الميديا'), BottomNavigationBarItem(icon: Icon(Icons.mouse), label: 'الماوس'), BottomNavigationBarItem(icon: Icon(Icons.monitor), label: 'الشاشة'), BottomNavigationBarItem(icon: Icon(Icons.settings), label: 'الإعدادات')],
         ),
       );
     }
@@ -398,9 +374,7 @@ class _MainScreenState extends State<MainScreen> {
                         else if (char == "\n") sendCommand("K_ENTER"); 
                         else sendCommand("K_TYPE:$char");
                       }
-                    } else if (text.length < _lastText.length) {
-                      for (int i = 0; i < (_lastText.length - text.length); i++) sendCommand("K_BACK"); 
-                    }
+                    } else if (text.length < _lastText.length) { for (int i = 0; i < (_lastText.length - text.length); i++) sendCommand("K_BACK"); }
                     _lastText = text;
                   },
                 ),
@@ -410,47 +384,25 @@ class _MainScreenState extends State<MainScreen> {
           
           if (isMonitorMode || _currentIndex == 0 || _currentIndex == 1)
             Positioned(
-              top: isMonitorMode ? 20 : 60,
-              right: 20,
+              top: isMonitorMode ? 20 : 60, right: 20,
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   if (_isQuickBarOpen)
                     Container(
-                      margin: const EdgeInsets.only(right: 10),
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 0),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(25),
-                        border: Border.all(color: const Color(0xFFB829EA), width: 1.5),
-                        boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 10)]
-                      ),
+                      margin: const EdgeInsets.only(right: 10), padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 0),
+                      decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(25), border: Border.all(color: const Color(0xFFB829EA), width: 1.5), boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 10)]),
                       child: Row(
                         children: [
-                          IconButton(
-                            icon: const Icon(Icons.monitor, color: Colors.white70, size: 22),
-                            tooltip: 'تبديل الشاشة المعروضة',
-                            onPressed: () { sendCommand("TOGGLE_SCREEN"); HapticFeedback.heavyImpact(); },
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.keyboard, color: Colors.white70, size: 22),
-                            tooltip: 'إظهار/إخفاء الكيبورد',
-                            onPressed: () {
-                              if (isKeyboardOpen || _keyboardFocus.hasFocus) { FocusManager.instance.primaryFocus?.unfocus(); SystemChannels.textInput.invokeMethod('TextInput.hide'); } 
-                              else { _keyboardFocus.requestFocus(); SystemChannels.textInput.invokeMethod('TextInput.show'); }
-                              HapticFeedback.lightImpact();
-                            },
-                          ),
-                          _quickBtn(Icons.copy, 'نسخ', 'HOTKEY:ctrl+c'),
-                          _quickBtn(Icons.paste, 'لصق', 'HOTKEY:ctrl+v'),
-                          _quickBtn(Icons.cut, 'قص', 'HOTKEY:ctrl+x'),
-                          _quickBtn(Icons.undo, 'تراجع', 'HOTKEY:ctrl+z'),
+                          IconButton(icon: const Icon(Icons.monitor, color: Colors.white70, size: 22), tooltip: 'تبديل الشاشة', onPressed: () { sendCommand("TOGGLE_SCREEN"); HapticFeedback.heavyImpact(); }),
+                          IconButton(icon: const Icon(Icons.keyboard, color: Colors.white70, size: 22), tooltip: 'الكيبورد', onPressed: () { if (isKeyboardOpen || _keyboardFocus.hasFocus) { FocusManager.instance.primaryFocus?.unfocus(); SystemChannels.textInput.invokeMethod('TextInput.hide'); } else { _keyboardFocus.requestFocus(); SystemChannels.textInput.invokeMethod('TextInput.show'); } HapticFeedback.lightImpact(); }),
+                          _quickBtn(Icons.copy, 'نسخ', 'HOTKEY:ctrl+c'), _quickBtn(Icons.paste, 'لصق', 'HOTKEY:ctrl+v'), _quickBtn(Icons.cut, 'قص', 'HOTKEY:ctrl+x'), _quickBtn(Icons.undo, 'تراجع', 'HOTKEY:ctrl+z'),
                         ],
                       ),
                     ),
                   FloatingActionButton(
                     mini: true, backgroundColor: _isQuickBarOpen ? const Color(0xFF222533) : const Color(0xFFB829EA),
-                    onPressed: () => setState(() => _isQuickBarOpen = !_isQuickBarOpen),
-                    child: Icon(_isQuickBarOpen ? Icons.close : Icons.bolt, color: Colors.white),
+                    onPressed: () => setState(() => _isQuickBarOpen = !_isQuickBarOpen), child: Icon(_isQuickBarOpen ? Icons.close : Icons.bolt, color: Colors.white),
                   ),
                 ],
               ),
@@ -461,11 +413,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Widget _quickBtn(IconData icon, String tooltip, String cmd) {
-    return IconButton(
-      icon: Icon(icon, color: Colors.white70, size: 22),
-      tooltip: tooltip,
-      onPressed: () { sendCommand(cmd); HapticFeedback.lightImpact(); },
-    );
+    return IconButton(icon: Icon(icon, color: Colors.white70, size: 22), tooltip: tooltip, onPressed: () { sendCommand(cmd); HapticFeedback.lightImpact(); });
   }
 
   Widget _buildSettingsScreen() {
@@ -478,29 +426,51 @@ class _MainScreenState extends State<MainScreen> {
             padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.3))),
             child: Column(
               children: [
-                const Text("حالة الاتصال المباشر", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
+                const Text("إدارة الاتصال", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
                 const SizedBox(height: 15),
-                // واجهة نظيفة جداً: فقط نص الحالة، بدون أزرار يدوية مزعجة!
-                Center(
-                  child: Text(
-                    connectionStatus, 
-                    textAlign: TextAlign.center, 
-                    style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 16)
-                  )
+                Text(connectionStatus, textAlign: TextAlign.center, style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 14)),
+                const SizedBox(height: 20),
+                
+                // أزرار التحكم الصريح (اختيارك الذكي)
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: (isConnected && currentActiveMode == "wifi") ? null : startWifiMode,
+                        icon: const Icon(Icons.wifi, color: Colors.white),
+                        label: const Text('Wi-Fi', style: TextStyle(fontSize: 16)),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: currentActiveMode == "wifi" ? Colors.green : const Color(0xFF222533),
+                          foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 15),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: (isConnected && currentActiveMode == "usb") ? null : startUsbMode,
+                        icon: const Icon(Icons.usb, color: Colors.white),
+                        label: const Text('USB', style: TextStyle(fontSize: 16)),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: currentActiveMode == "usb" ? const Color(0xFFB829EA) : const Color(0xFF222533),
+                          foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 15),
-                if (isConnected)
+                if (isConnected) ...[
+                  const SizedBox(height: 15),
                   ElevatedButton.icon(
-                    onPressed: () {
-                      manualDisconnect(); // زر احتياطي لعمل Refresh إذا رغب المستخدم
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم الفصل، جاري إعادة البحث... 🔄')));
-                    },
-                    icon: const Icon(Icons.refresh, color: Colors.white),
-                    label: const Text('إعادة تنشيط الاتصال', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF222533), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 10)),
+                    onPressed: manualDisconnect,
+                    icon: const Icon(Icons.power_settings_new, color: Colors.white),
+                    label: const Text('قطع الاتصال', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 10)),
                   ),
-                const SizedBox(height: 10),
-                const Text("التطبيق يعمل بنظام الاتصال التلقائي الصامت. اشبك سلك USB وسيتصل فوراً، أو افصله ليشبك واي فاي تلقائياً!", style: TextStyle(color: Colors.green, fontSize: 12), textAlign: TextAlign.center),
+                ]
               ],
             ),
           ),
@@ -528,42 +498,22 @@ class _MainScreenState extends State<MainScreen> {
     return GridView.count(
       crossAxisCount: 3, childAspectRatio: 1.2, padding: const EdgeInsets.all(15), mainAxisSpacing: 15, crossAxisSpacing: 15, 
       children: [
-        _buildMediaBtn('كتم الصوت', Icons.volume_off, 'VOL_MUTE'), 
-        _buildMediaBtn('إيقاف/تشغيل', Icons.play_arrow, 'MEDIA_PLAY_PAUSE'), 
-        _buildContinuousMediaBtn('رفع الصوت', Icons.volume_up, 'VOL_UP'), 
-        _buildMediaBtn('المقطع السابق', Icons.skip_previous, 'MEDIA_PREV'), 
-        _buildMediaBtn('المقطع التالي', Icons.skip_next, 'MEDIA_NEXT'), 
-        _buildContinuousMediaBtn('خفض الصوت', Icons.volume_down, 'VOL_DOWN')
+        _buildMediaBtn('كتم الصوت', Icons.volume_off, 'VOL_MUTE'), _buildMediaBtn('إيقاف/تشغيل', Icons.play_arrow, 'MEDIA_PLAY_PAUSE'), _buildContinuousMediaBtn('رفع الصوت', Icons.volume_up, 'VOL_UP'), 
+        _buildMediaBtn('المقطع السابق', Icons.skip_previous, 'MEDIA_PREV'), _buildMediaBtn('المقطع التالي', Icons.skip_next, 'MEDIA_NEXT'), _buildContinuousMediaBtn('خفض الصوت', Icons.volume_down, 'VOL_DOWN')
       ]
     );
   }
 
-  Widget _buildMediaBtn(String t, IconData i, String c) {
-    return GestureDetector(
-      onTap: () { sendCommand(c); HapticFeedback.lightImpact(); }, 
-      child: Container(decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15)), child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(i, size: 28, color: const Color(0xFFB829EA)), const SizedBox(height: 8), Text(t, style: const TextStyle(fontSize: 12), textAlign: TextAlign.center)]))
-    );
-  }
-
-  Widget _buildContinuousMediaBtn(String t, IconData i, String c) {
-    return GestureDetector(
-      onTapDown: (_) { sendCommand(c); HapticFeedback.lightImpact(); _volumeTimer = Timer.periodic(const Duration(milliseconds: 150), (timer) { sendCommand(c); }); },
-      onTapUp: (_) => _volumeTimer?.cancel(), onTapCancel: () => _volumeTimer?.cancel(),
-      child: Container(decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15)), child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(i, size: 28, color: const Color(0xFFB829EA)), const SizedBox(height: 8), Text(t, style: const TextStyle(fontSize: 12), textAlign: TextAlign.center)]))
-    );
-  }
+  Widget _buildMediaBtn(String t, IconData i, String c) { return GestureDetector(onTap: () { sendCommand(c); HapticFeedback.lightImpact(); }, child: Container(decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15)), child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(i, size: 28, color: const Color(0xFFB829EA)), const SizedBox(height: 8), Text(t, style: const TextStyle(fontSize: 12), textAlign: TextAlign.center)]))); }
+  Widget _buildContinuousMediaBtn(String t, IconData i, String c) { return GestureDetector(onTapDown: (_) { sendCommand(c); HapticFeedback.lightImpact(); _volumeTimer = Timer.periodic(const Duration(milliseconds: 150), (timer) { sendCommand(c); }); }, onTapUp: (_) => _volumeTimer?.cancel(), onTapCancel: () => _volumeTimer?.cancel(), child: Container(decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15)), child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(i, size: 28, color: const Color(0xFFB829EA)), const SizedBox(height: 8), Text(t, style: const TextStyle(fontSize: 12), textAlign: TextAlign.center)]))); }
 
   Widget _buildMouseScreen() {
     return Column(
       children: [
         Expanded(child: _buildGestureArea(child: Container(margin: const EdgeInsets.all(20), decoration: BoxDecoration(border: Border.all(color: const Color(0xFFB829EA), width: 2), borderRadius: BorderRadius.circular(20), color: const Color(0xFF15161E)), child: const Center(child: Text('إصبع واحد للتحريك\nإصبعين للتمرير (سكرول)\nلمسة واحدة للنقر\nضغطة مطولة مع السحب للتحديد', textAlign: TextAlign.center, style: TextStyle(color: Colors.white70, fontSize: 16)))))),
-        Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [_mouseBtn('يسار', 'M_L_DOWN', 'M_L_UP'), _mouseBtn('يمين', 'M_R_DOWN', 'M_R_UP')]),
-        const SizedBox(height: 80), 
+        Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [_mouseBtn('يسار', 'M_L_DOWN', 'M_L_UP'), _mouseBtn('يمين', 'M_R_DOWN', 'M_R_UP')]), const SizedBox(height: 80), 
       ],
     );
   }
-
-  Widget _mouseBtn(String t, String down, String up) {
-    return GestureDetector(onTapDown: (_) => sendCommand(down), onTapUp: (_) => sendCommand(up), child: Container(padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 20), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(10)), child: Text(t, style: const TextStyle(fontSize: 16))));
-  }
+  Widget _mouseBtn(String t, String down, String up) { return GestureDetector(onTapDown: (_) => sendCommand(down), onTapUp: (_) => sendCommand(up), child: Container(padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 20), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(10)), child: Text(t, style: const TextStyle(fontSize: 16)))); }
 }
