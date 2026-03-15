@@ -60,9 +60,7 @@ class _MainScreenState extends State<MainScreen> {
 
   Offset? _lastLongPressOffset;
   Timer? _volumeTimer;
-  
-  // متغير للتحكم في سرعة إرسال الماوس (يحل مشكلة التقطيع)
-  int _lastMouseSendTime = 0;
+  int _lastMouseSendTime = 0; // للتحكم في سرعة إرسال الماوس
 
   @override
   void initState() {
@@ -169,7 +167,11 @@ class _MainScreenState extends State<MainScreen> {
                   }
               } catch (e) {}
           } else {
-              if (isMonitorMode) currentFrame.value = frameData;
+              if (isMonitorMode) {
+                currentFrame.value = frameData;
+              }
+              // السطر السحري لحل مشكلة اختناق الـ USB والواي فاي
+              sendCommand("FRAME_ACK"); 
           }
           
           dataBuffer.removeRange(0, expectedFrameLength);
@@ -190,10 +192,9 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
-  // دالة الصمام الخانق للماوس (لحل مشكلة التقطيع في البث)
   void _throttledMouseMove(double dx, double dy) {
     int now = DateTime.now().millisecondsSinceEpoch;
-    if (now - _lastMouseSendTime > 16) { // السماح بإرسال 60 إحداثية فقط في الثانية
+    if (now - _lastMouseSendTime > 16) { 
       sendCommand("M_MOVE:$dx:$dy");
       _lastMouseSendTime = now;
     }
@@ -391,7 +392,6 @@ class _MainScreenState extends State<MainScreen> {
                       ),
                       child: Row(
                         children: [
-                          // تم تغيير أيقونة التبديل إلى "شاشة" 🖥️
                           IconButton(
                             icon: const Icon(Icons.monitor, color: Colors.white70, size: 22),
                             tooltip: 'تبديل الشاشة المعروضة',
