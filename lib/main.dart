@@ -60,6 +60,9 @@ class _MainScreenState extends State<MainScreen> {
 
   Offset? _lastLongPressOffset;
   Timer? _volumeTimer;
+  
+  // متغير للتحكم في سرعة إرسال الماوس (يحل مشكلة التقطيع)
+  int _lastMouseSendTime = 0;
 
   @override
   void initState() {
@@ -187,6 +190,15 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
+  // دالة الصمام الخانق للماوس (لحل مشكلة التقطيع في البث)
+  void _throttledMouseMove(double dx, double dy) {
+    int now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastMouseSendTime > 16) { // السماح بإرسال 60 إحداثية فقط في الثانية
+      sendCommand("M_MOVE:$dx:$dy");
+      _lastMouseSendTime = now;
+    }
+  }
+
   void manualDisconnect() { sendCommand("K_SPACE"); _handleDisconnect(); }
 
   void _exitFullScreenMode() {
@@ -200,8 +212,14 @@ class _MainScreenState extends State<MainScreen> {
   Widget _buildGestureArea({required Widget child}) {
     return GestureDetector(
       onScaleUpdate: (details) {
-        if (details.pointerCount == 1) sendCommand("M_MOVE:${details.focalPointDelta.dx}:${details.focalPointDelta.dy}");
-        else if (details.pointerCount == 2) sendCommand("M_SCROLL:${details.focalPointDelta.dy}");
+        if (details.pointerCount == 1) _throttledMouseMove(details.focalPointDelta.dx, details.focalPointDelta.dy);
+        else if (details.pointerCount == 2) {
+          int now = DateTime.now().millisecondsSinceEpoch;
+          if (now - _lastMouseSendTime > 30) {
+            sendCommand("M_SCROLL:${details.focalPointDelta.dy}");
+            _lastMouseSendTime = now;
+          }
+        }
       },
       onTap: () { sendCommand("M_CLICK"); HapticFeedback.selectionClick(); },
       onDoubleTap: () { sendCommand("M_DCLICK"); HapticFeedback.mediumImpact(); },
@@ -212,7 +230,7 @@ class _MainScreenState extends State<MainScreen> {
           double dx = details.localOffsetFromOrigin.dx - _lastLongPressOffset!.dx;
           double dy = details.localOffsetFromOrigin.dy - _lastLongPressOffset!.dy;
           _lastLongPressOffset = details.localOffsetFromOrigin;
-          sendCommand("M_MOVE:${dx}:${dy}");
+          _throttledMouseMove(dx, dy);
         }
       },
       onLongPressEnd: (details) { _lastLongPressOffset = null; sendCommand("M_L_UP"); HapticFeedback.selectionClick(); },
@@ -355,9 +373,6 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
           
-          // ===========================================
-          // الشريط العلوي العائم (يظهر في الشاشة 3، الستريم دك 0، والميديا 1)
-          // ===========================================
           if (isMonitorMode || _currentIndex == 0 || _currentIndex == 1)
             Positioned(
               top: isMonitorMode ? 20 : 60,
@@ -376,8 +391,9 @@ class _MainScreenState extends State<MainScreen> {
                       ),
                       child: Row(
                         children: [
+                          // تم تغيير أيقونة التبديل إلى "شاشة" 🖥️
                           IconButton(
-                            icon: const Icon(Icons.switch_video, color: Colors.white70, size: 22),
+                            icon: const Icon(Icons.monitor, color: Colors.white70, size: 22),
                             tooltip: 'تبديل الشاشة المعروضة',
                             onPressed: () { sendCommand("TOGGLE_SCREEN"); HapticFeedback.heavyImpact(); },
                           ),
