@@ -393,6 +393,8 @@ class _MainScreenState extends State<MainScreen> {
           backgroundColor: const Color(0xFF15161E), selectedItemColor: const Color(0xFFB829EA), unselectedItemColor: const Color(0xFF888B94), type: BottomNavigationBarType.fixed, currentIndex: _currentIndex,
           onTap: (index) {
             if (index == 0 || index == 3) {
+              // Force a fresh frame when switching to the broadcast/stream view.
+              sendCommand("FORCE_FRAME");
               setState(() => _currentIndex = index); 
               if(index == 3) setState(() { isMonitorMode = true; });
               SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]); SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
@@ -453,7 +455,7 @@ class _MainScreenState extends State<MainScreen> {
                       decoration: BoxDecoration(color: const Color(0xFF15161E).withOpacity(0.8), borderRadius: BorderRadius.circular(25), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.5), width: 1.5), boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10)]),
                       child: Row(
                         children: [
-                          IconButton(icon: const Icon(Icons.monitor, color: Colors.white70, size: 22), tooltip: 'تبديل الشاشة', onPressed: () { sendCommand("TOGGLE_SCREEN"); HapticFeedback.heavyImpact(); }),
+                          IconButton(icon: const Icon(Icons.monitor, color: Colors.white70, size: 22), tooltip: 'تبديل الشاشة', onPressed: () { sendCommand("FORCE_FRAME"); sendCommand("TOGGLE_SCREEN"); HapticFeedback.heavyImpact(); }),
                           IconButton(icon: const Icon(Icons.keyboard, color: Colors.white70, size: 22), tooltip: 'الكيبورد', onPressed: () { if (isKeyboardOpen || _keyboardFocus.hasFocus) { FocusManager.instance.primaryFocus?.unfocus(); SystemChannels.textInput.invokeMethod('TextInput.hide'); } else { _keyboardFocus.requestFocus(); SystemChannels.textInput.invokeMethod('TextInput.show'); } HapticFeedback.lightImpact(); }),
                           _quickBtn(Icons.copy, 'نسخ', 'HOTKEY:ctrl+c'), _quickBtn(Icons.paste, 'لصق', 'HOTKEY:ctrl+v'), _quickBtn(Icons.cut, 'قص', 'HOTKEY:ctrl+x'), _quickBtn(Icons.undo, 'تراجع', 'HOTKEY:ctrl+z'),
                         ],
