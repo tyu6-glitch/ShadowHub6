@@ -115,12 +115,24 @@ class _MainScreenState extends State<MainScreen> {
     });
 
     try {
-      final info = NetworkInfo();
-      String? wifiIP = await info.getWifiIP();
-      if (wifiIP == null || !wifiIP.contains('.')) {
-        setState(() { isConnecting = false; connectionStatus = "الجهاز غير متصل بالواي فاي!"; statusColor = Colors.red; });
+      String? wifiIP;
+      for (var interface in await NetworkInterface.list()) {
+        for (var addr in interface.addresses) {
+          if (addr.type == InternetAddressType.IPv4 && !addr.isLoopback) {
+            if (addr.address.startsWith('192.168.') || addr.address.startsWith('10.')) {
+              wifiIP = addr.address;
+              break;
+            }
+          }
+        }
+        if (wifiIP != null) break;
+      }
+
+      if (wifiIP == null) {
+        setState(() { isConnecting = false; connectionStatus = "تأكد من اتصال الجوال بالواي فاي!"; statusColor = Colors.red; });
         return;
       }
+
       String subnet = wifiIP.substring(0, wifiIP.lastIndexOf('.'));
       bool found = false;
       List<Future<void>> sweepTasks = [];
@@ -142,7 +154,7 @@ class _MainScreenState extends State<MainScreen> {
         setState(() { isConnecting = false; connectionStatus = "لم يتم العثور على الكمبيوتر في الشبكة."; statusColor = Colors.red; });
       }
     } catch (e) {
-      setState(() { isConnecting = false; connectionStatus = "حدث خطأ أثناء البحث."; statusColor = Colors.red; });
+      setState(() { isConnecting = false; connectionStatus = "حدث خطأ أثناء البحث: $e"; statusColor = Colors.red; });
     }
   }
 
