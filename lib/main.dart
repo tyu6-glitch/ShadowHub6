@@ -22,7 +22,7 @@ class ShadowHubApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF0B0C10),
-        splashColor: const Color(0xFFB829EA).withOpacity(0.3), 
+        splashColor: const Color(0xFFB829EA).withOpacity(0.3),
         highlightColor: const Color(0xFFB829EA).withOpacity(0.1),
       ),
       home: const MainScreen(),
@@ -73,9 +73,6 @@ class _MainScreenState extends State<MainScreen> {
     super.dispose();
   }
 
-  // ===========================================
-  // 1. الاتصال عبر USB
-  // ===========================================
   Future<void> startUsbMode() async {
     manualDisconnect(); 
     setState(() {
@@ -99,9 +96,6 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
-  // ===========================================
-  // 2. الاتصال عبر Wi-Fi 
-  // ===========================================
   Future<void> startWifiMode() async {
     manualDisconnect();
     setState(() {
@@ -135,7 +129,6 @@ class _MainScreenState extends State<MainScreen> {
 
       bool found = false;
       int batchSize = 40; 
-      
       for (int i = 1; i < 255; i += batchSize) {
         if (found || isConnected) break;
         
@@ -163,14 +156,13 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   // ===========================================
-  // 🚀 إعداد وتجهيز الاتصال المحدث (Zero-Copy)
+  // 💡 إعداد وتجهيز الاتصال (النسخة الآمنة والذكية مع BytesBuilder)
   // ===========================================
   void setupConnection(Socket socket, String type) {
     activeSocket = socket;
     activeSocket!.setOption(SocketOption.tcpNoDelay, true);
     isHandshakeDone = false; 
 
-    // 💡 الحل الجذري: استخدام BytesBuilder بدلاً من List العادية لسرعة لا تصدق
     BytesBuilder buffer = BytesBuilder(copy: false);
     int expectedFrameLength = -1;
 
@@ -198,7 +190,8 @@ class _MainScreenState extends State<MainScreen> {
         if (expectedFrameLength == -1) {
           if (buffer.length >= 4) {
             var allBytes = buffer.takeBytes();
-            expectedFrameLength = ByteData.sublistView(Uint8List.fromList(allBytes.sublist(0, 4))).getUint32(0, Endian.big);
+            var lengthBytes = Uint8List.view(allBytes.buffer, allBytes.offsetInBytes, 4);
+            expectedFrameLength = ByteData.sublistView(lengthBytes).getUint32(0, Endian.big);
             buffer.add(allBytes.sublist(4));
           } else { 
             break; 
@@ -223,10 +216,9 @@ class _MainScreenState extends State<MainScreen> {
                   }
               } catch (e) {}
           } else {
-              // لا يوجد FRAME_ACK هنا مطلقاً! نعرض الإطار فقط
-              if (isMonitorMode) { 
-                currentFrame.value = Uint8List.fromList(frameData); 
-              }
+              // 💡 تحديث الإطار ثم إرسال FRAME_ACK فوراً للسماح بالصورة القادمة
+              if (isMonitorMode) { currentFrame.value = frameData; }
+              sendCommand("FRAME_ACK"); 
           }
           
           buffer.add(allBytes.sublist(expectedFrameLength));
@@ -391,6 +383,7 @@ class _MainScreenState extends State<MainScreen> {
           backgroundColor: const Color(0xFF15161E), selectedItemColor: const Color(0xFFB829EA), unselectedItemColor: const Color(0xFF888B94), type: BottomNavigationBarType.fixed, currentIndex: _currentIndex,
           onTap: (index) {
             if (index == 0 || index == 3) {
+              sendCommand("FORCE_FRAME");
               setState(() => _currentIndex = index); 
               if(index == 3) setState(() { isMonitorMode = true; });
               SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]); SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
@@ -450,7 +443,7 @@ class _MainScreenState extends State<MainScreen> {
                       decoration: BoxDecoration(color: const Color(0xFF15161E).withOpacity(0.8), borderRadius: BorderRadius.circular(25), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.5), width: 1.5), boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10)]),
                       child: Row(
                         children: [
-                          IconButton(icon: const Icon(Icons.monitor, color: Colors.white70, size: 22), tooltip: 'تبديل الشاشة', onPressed: () { sendCommand("TOGGLE_SCREEN"); HapticFeedback.heavyImpact(); }),
+                          IconButton(icon: const Icon(Icons.monitor, color: Colors.white70, size: 22), tooltip: 'تبديل الشاشة', onPressed: () { sendCommand("FORCE_FRAME"); sendCommand("TOGGLE_SCREEN"); HapticFeedback.heavyImpact(); }),
                           IconButton(icon: const Icon(Icons.keyboard, color: Colors.white70, size: 22), tooltip: 'الكيبورد', onPressed: () { if (isKeyboardOpen || _keyboardFocus.hasFocus) { FocusManager.instance.primaryFocus?.unfocus(); SystemChannels.textInput.invokeMethod('TextInput.hide'); } else { _keyboardFocus.requestFocus(); SystemChannels.textInput.invokeMethod('TextInput.show'); } HapticFeedback.lightImpact(); }),
                           _quickBtn(Icons.copy, 'نسخ', 'HOTKEY:ctrl+c'), _quickBtn(Icons.paste, 'لصق', 'HOTKEY:ctrl+v'), _quickBtn(Icons.cut, 'قص', 'HOTKEY:ctrl+x'), _quickBtn(Icons.undo, 'تراجع', 'HOTKEY:ctrl+z'),
                         ],
