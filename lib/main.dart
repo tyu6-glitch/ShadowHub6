@@ -22,7 +22,7 @@ class ShadowHubApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF0B0C10),
-        splashColor: const Color(0xFFB829EA).withOpacity(0.3), // لون تأثير اللمس
+        splashColor: const Color(0xFFB829EA).withOpacity(0.3), 
         highlightColor: const Color(0xFFB829EA).withOpacity(0.1),
       ),
       home: const MainScreen(),
@@ -50,7 +50,7 @@ class _MainScreenState extends State<MainScreen> {
 
   String connectionStatus = "اختر طريقة الاتصال للبدء 👇";
   Color statusColor = Colors.white;
-  String currentActiveMode = "none"; // usb, wifi, none
+  String currentActiveMode = "none"; 
   
   double mouseSpeed = 4.0;
   double streamQuality = 75.0;
@@ -59,8 +59,6 @@ class _MainScreenState extends State<MainScreen> {
   ServerSocket? serverSocket;
   bool isConnected = false;
   ValueNotifier<Uint8List?> currentFrame = ValueNotifier(null);
-  List<int> dataBuffer = [];
-  int expectedFrameLength = 0;
   bool isHandshakeDone = false;
 
   Offset? _lastLongPressOffset;
@@ -76,7 +74,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   // ===========================================
-  // 1. الاتصال عبر USB (تم تعديله ليدعم Android و iOS)
+  // 1. الاتصال عبر USB
   // ===========================================
   Future<void> startUsbMode() async {
     manualDisconnect(); 
@@ -88,7 +86,6 @@ class _MainScreenState extends State<MainScreen> {
     });
 
     try {
-      // InternetAddress.anyIPv4 يسمح للأندرويد (ADB) بالدخول للنفق
       serverSocket = await ServerSocket.bind(InternetAddress.anyIPv4, 8080);
       serverSocket!.listen((Socket client) {
         setupConnection(client, "سلك USB 🚀");
@@ -103,7 +100,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   // ===========================================
-  // 2. الاتصال عبر Wi-Fi (معدل بنظام الدفعات الذكي للأندرويد)
+  // 2. الاتصال عبر Wi-Fi 
   // ===========================================
   Future<void> startWifiMode() async {
     manualDisconnect();
@@ -116,11 +113,9 @@ class _MainScreenState extends State<MainScreen> {
 
     try {
       String? wifiIP;
-      // جلب عنوان الجوال في الشبكة المحلية
       for (var interface in await NetworkInterface.list()) {
         for (var addr in interface.addresses) {
           if (addr.type == InternetAddressType.IPv4 && !addr.isLoopback) {
-            // يشمل أغلب النطاقات للراوترات المنزلية
             if (addr.address.startsWith('192.168.') || addr.address.startsWith('10.') || addr.address.startsWith('172.')) {
               wifiIP = addr.address;
               break;
@@ -139,9 +134,8 @@ class _MainScreenState extends State<MainScreen> {
       setState(() { connectionStatus = "جاري البحث في شبكتك ($subnet.x) 🔍..."; });
 
       bool found = false;
-
-      // تقسيم البحث إلى دفعات (40 طلب في كل دفعة) لمنع الأندرويد من حظر الاتصال
       int batchSize = 40; 
+      
       for (int i = 1; i < 255; i += batchSize) {
         if (found || isConnected) break;
         
@@ -153,14 +147,10 @@ class _MainScreenState extends State<MainScreen> {
                 found = true; 
                 setupConnection(socket, "الـ Wi-Fi 📶 ($subnet.$j)");
               } else { socket.destroy(); }
-            }).catchError((_) {}) // تجاهل الأخطاء بصمت للأجهزة غير المتوفرة
+            }).catchError((_) {}) 
           );
         }
-        
-        // ننتظر هذه الدفعة حتى تنتهي (ثانية واحدة كحد أقصى)
         await Future.wait(sweepTasks);
-        
-        // تأخير بسيط جداً لإعطاء النظام فرصة لالتقاط الأنفاس قبل الدفعة التالية
         await Future.delayed(const Duration(milliseconds: 50));
       }
       
@@ -173,12 +163,16 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   // ===========================================
-  // إعداد وتجهيز الاتصال
+  // 🚀 إعداد وتجهيز الاتصال المحدث (Zero-Copy)
   // ===========================================
   void setupConnection(Socket socket, String type) {
     activeSocket = socket;
     activeSocket!.setOption(SocketOption.tcpNoDelay, true);
-    isHandshakeDone = false; dataBuffer.clear(); expectedFrameLength = 0;
+    isHandshakeDone = false; 
+
+    // 💡 الحل الجذري: استخدام BytesBuilder بدلاً من List العادية لسرعة لا تصدق
+    BytesBuilder buffer = BytesBuilder(copy: false);
+    int expectedFrameLength = -1;
 
     activeSocket!.listen((Uint8List data) {
       if (!isHandshakeDone) {
@@ -198,18 +192,22 @@ class _MainScreenState extends State<MainScreen> {
         return;
       }
 
-      dataBuffer.addAll(data);
+      buffer.add(data);
+
       while (true) {
-        if (expectedFrameLength == 0) {
-          if (dataBuffer.length >= 4) {
-            var lengthBytes = Uint8List.fromList(dataBuffer.sublist(0, 4));
-            expectedFrameLength = ByteData.sublistView(lengthBytes).getUint32(0, Endian.big);
-            dataBuffer.removeRange(0, 4);
-          } else { break; }
+        if (expectedFrameLength == -1) {
+          if (buffer.length >= 4) {
+            var allBytes = buffer.takeBytes();
+            expectedFrameLength = ByteData.sublistView(Uint8List.fromList(allBytes.sublist(0, 4))).getUint32(0, Endian.big);
+            buffer.add(allBytes.sublist(4));
+          } else { 
+            break; 
+          }
         }
 
-        if (expectedFrameLength > 0 && dataBuffer.length >= expectedFrameLength) {
-          var frameData = Uint8List.fromList(dataBuffer.sublist(0, expectedFrameLength));
+        if (expectedFrameLength != -1 && buffer.length >= expectedFrameLength) {
+          var allBytes = buffer.takeBytes();
+          var frameData = allBytes.sublist(0, expectedFrameLength);
           
           if (frameData.length > 10 && 
               frameData[0] == 83 && frameData[1] == 89 && frameData[2] == 78 && frameData[3] == 67 &&
@@ -225,14 +223,19 @@ class _MainScreenState extends State<MainScreen> {
                   }
               } catch (e) {}
           } else {
-              if (isMonitorMode) { currentFrame.value = frameData; }
-              sendCommand("FRAME_ACK"); 
+              // لا يوجد FRAME_ACK هنا مطلقاً! نعرض الإطار فقط
+              if (isMonitorMode) { 
+                currentFrame.value = Uint8List.fromList(frameData); 
+              }
           }
-          dataBuffer.removeRange(0, expectedFrameLength);
-          expectedFrameLength = 0; 
-        } else { break; }
+          
+          buffer.add(allBytes.sublist(expectedFrameLength));
+          expectedFrameLength = -1; 
+        } else { 
+          break; 
+        }
       }
-    }, onDone: _handleDisconnect, onError: (e) => _handleDisconnect());
+    }, onDone: _handleDisconnect, onError: (e) => _handleDisconnect(), cancelOnError: true);
   }
 
   void _handleDisconnect() {
@@ -302,9 +305,6 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  // ===========================================
-  // واجهة Stream Deck المحدثة والاحترافية
-  // ===========================================
   Widget _buildStreamDeckScreen() {
     if (syncedApps.isEmpty) { return const Center(child: Text("لا توجد تطبيقات متزامنة.\nافتح برنامج الكمبيوتر واضغط 'مزامنة'.", textAlign: TextAlign.center, style: TextStyle(color: Colors.white54, fontSize: 16))); }
     
@@ -341,7 +341,6 @@ class _MainScreenState extends State<MainScreen> {
             );
           },
         ),
-        // زر الخروج من وضع الـ Stream Deck
         Positioned(
           top: 20, left: 20, 
           child: Container(
@@ -361,7 +360,6 @@ class _MainScreenState extends State<MainScreen> {
     Widget activeScreen;
 
     if (isMonitorMode || _currentIndex == 0) {
-      // شاشة البث وشاشة الستريم ديك تأخذ الشاشة بالكامل بالعرض
       activeScreen = Scaffold(
         resizeToAvoidBottomInset: false, backgroundColor: Colors.black,
         body: SafeArea(
@@ -393,8 +391,6 @@ class _MainScreenState extends State<MainScreen> {
           backgroundColor: const Color(0xFF15161E), selectedItemColor: const Color(0xFFB829EA), unselectedItemColor: const Color(0xFF888B94), type: BottomNavigationBarType.fixed, currentIndex: _currentIndex,
           onTap: (index) {
             if (index == 0 || index == 3) {
-              // Force a fresh frame when switching to the broadcast/stream view.
-              sendCommand("FORCE_FRAME");
               setState(() => _currentIndex = index); 
               if(index == 3) setState(() { isMonitorMode = true; });
               SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]); SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
@@ -442,7 +438,6 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
           
-          // القائمة العائمة (أصبحت شفافة وأنيقة)
           if (isMonitorMode || _currentIndex == 0 || _currentIndex == 1)
             Positioned(
               top: isMonitorMode || _currentIndex == 0 ? 20 : 60, right: 20,
@@ -455,7 +450,7 @@ class _MainScreenState extends State<MainScreen> {
                       decoration: BoxDecoration(color: const Color(0xFF15161E).withOpacity(0.8), borderRadius: BorderRadius.circular(25), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.5), width: 1.5), boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10)]),
                       child: Row(
                         children: [
-                          IconButton(icon: const Icon(Icons.monitor, color: Colors.white70, size: 22), tooltip: 'تبديل الشاشة', onPressed: () { sendCommand("FORCE_FRAME"); sendCommand("TOGGLE_SCREEN"); HapticFeedback.heavyImpact(); }),
+                          IconButton(icon: const Icon(Icons.monitor, color: Colors.white70, size: 22), tooltip: 'تبديل الشاشة', onPressed: () { sendCommand("TOGGLE_SCREEN"); HapticFeedback.heavyImpact(); }),
                           IconButton(icon: const Icon(Icons.keyboard, color: Colors.white70, size: 22), tooltip: 'الكيبورد', onPressed: () { if (isKeyboardOpen || _keyboardFocus.hasFocus) { FocusManager.instance.primaryFocus?.unfocus(); SystemChannels.textInput.invokeMethod('TextInput.hide'); } else { _keyboardFocus.requestFocus(); SystemChannels.textInput.invokeMethod('TextInput.show'); } HapticFeedback.lightImpact(); }),
                           _quickBtn(Icons.copy, 'نسخ', 'HOTKEY:ctrl+c'), _quickBtn(Icons.paste, 'لصق', 'HOTKEY:ctrl+v'), _quickBtn(Icons.cut, 'قص', 'HOTKEY:ctrl+x'), _quickBtn(Icons.undo, 'تراجع', 'HOTKEY:ctrl+z'),
                         ],
@@ -544,9 +539,6 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  // ===========================================
-  // واجهة الميديا (تأثير اللمس / الأنيميشن)
-  // ===========================================
   Widget _buildMediaScreen() {
     return GridView.count(
       crossAxisCount: 3, childAspectRatio: 1.2, padding: const EdgeInsets.all(15), mainAxisSpacing: 15, crossAxisSpacing: 15, 
@@ -580,15 +572,12 @@ class _MainScreenState extends State<MainScreen> {
     ); 
   }
 
-  // ===========================================
-  // واجهة لوحة اللمس (كأنها لابتوب)
-  // ===========================================
   Widget _buildMouseScreen() {
     return Padding(
       padding: const EdgeInsets.all(20.0),
       child: Container(
         decoration: BoxDecoration(
-          color: const Color(0xFF1E1F29), // لون فاتح قليلاً لتبدو كلوحة لمس
+          color: const Color(0xFF1E1F29), 
           borderRadius: BorderRadius.circular(15),
           boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 5))]
         ),
@@ -605,11 +594,11 @@ class _MainScreenState extends State<MainScreen> {
                 )
               )
             ),
-            Container(height: 1, color: Colors.white12), // خط فاصل بين اللمس والأزرار
+            Container(height: 1, color: Colors.white12), 
             Row(
               children: [
                 Expanded(child: _mouseBtn('يسار', 'M_L_DOWN', 'M_L_UP', true)),
-                Container(width: 1, height: 50, color: Colors.white12), // خط فاصل بين الزرين
+                Container(width: 1, height: 50, color: Colors.white12), 
                 Expanded(child: _mouseBtn('يمين', 'M_R_DOWN', 'M_R_UP', false)),
               ]
             )
