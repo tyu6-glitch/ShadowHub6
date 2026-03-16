@@ -5,6 +5,7 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:network_info_plus/network_info_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart'; // 💡 استيراد مكتبة حفظ الإعدادات
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -48,7 +49,7 @@ class _MainScreenState extends State<MainScreen> {
   bool isConnecting = false;
   bool _isQuickBarOpen = false;
 
-  // 🌍 نظام اللغات (Localization)
+  // 🌍 نظام اللغات
   String currentLang = "ar";
   String connectionStatusCode = "status_init";
   Color statusColor = Colors.white;
@@ -137,6 +138,25 @@ class _MainScreenState extends State<MainScreen> {
   Offset? _lastLongPressOffset;
   Timer? _volumeTimer;
   int _lastMouseSendTime = 0;
+
+  // 💡 استدعاء دالة التحميل عند فتح التطبيق
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedSettings();
+  }
+
+  // 💡 دالة تحميل الإعدادات من الذاكرة
+  Future<void> _loadSavedSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        currentLang = prefs.getString('saved_lang') ?? "ar";
+        mouseSpeed = prefs.getDouble('saved_mouse_speed') ?? 4.0;
+        streamQuality = prefs.getDouble('saved_stream_quality') ?? 75.0;
+      });
+    }
+  }
 
   @override
   void dispose() {
@@ -523,7 +543,7 @@ class _MainScreenState extends State<MainScreen> {
               ),
             ),
             
-            // 💡 التعديل: زر الاختصارات (البرق) مثبت دائماً في اليمين (right: 25) لتجنب التداخل
+            // 💡 التعديل: زر الاختصارات (البرق) مثبت دائماً في اليمين، ومخفي في صفحة الإعدادات
             if ((isMonitorMode || _currentIndex == 0 || _currentIndex == 1 || _currentIndex == 2) && _currentIndex != 4)
               Positioned(
                 top: isMonitorMode || _currentIndex == 0 ? 25 : 60, 
@@ -573,8 +593,13 @@ class _MainScreenState extends State<MainScreen> {
               children: [
                 Text(t("settings_general"), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
                 const SizedBox(height: 15),
+                // 💡 زر تغيير اللغة مع الحفظ في الذاكرة
                 ElevatedButton.icon(
-                  onPressed: () { setState(() { currentLang = currentLang == 'ar' ? 'en' : 'ar'; }); }, 
+                  onPressed: () async { 
+                    setState(() { currentLang = currentLang == 'ar' ? 'en' : 'ar'; }); 
+                    final prefs = await SharedPreferences.getInstance();
+                    prefs.setString('saved_lang', currentLang);
+                  }, 
                   icon: const Icon(Icons.language, color: Colors.white), 
                   label: Text(t("lang_switch"), style: const TextStyle(fontSize: 16)),
                   style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF222533), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20)),
@@ -642,10 +667,28 @@ class _MainScreenState extends State<MainScreen> {
               children: [
                 Center(child: Text(t("settings_perf"), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white))), const SizedBox(height: 20),
                 Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(t("mouse_speed"), style: const TextStyle(color: Colors.white70, fontSize: 16)), Text(mouseSpeed.toStringAsFixed(1), style: const TextStyle(color: Color(0xFFB829EA), fontWeight: FontWeight.bold, fontSize: 16)),]),
-                Slider(value: mouseSpeed, min: 1.0, max: 10.0, divisions: 18, activeColor: const Color(0xFFB829EA), onChanged: (value) { setState(() { mouseSpeed = value; }); }, onChangeEnd: (value) { sendCommand("SET_SENSITIVITY:$value"); }),
+                // 💡 شريط سرعة الماوس مع الحفظ
+                Slider(
+                  value: mouseSpeed, min: 1.0, max: 10.0, divisions: 18, activeColor: const Color(0xFFB829EA), 
+                  onChanged: (value) { setState(() { mouseSpeed = value; }); }, 
+                  onChangeEnd: (value) async { 
+                    sendCommand("SET_SENSITIVITY:$value"); 
+                    final prefs = await SharedPreferences.getInstance();
+                    prefs.setDouble('saved_mouse_speed', value);
+                  }
+                ),
                 const SizedBox(height: 15),
                 Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(t("stream_quality"), style: const TextStyle(color: Colors.white70, fontSize: 16)), Text("${streamQuality.toInt()}%", style: const TextStyle(color: Color(0xFFB829EA), fontWeight: FontWeight.bold, fontSize: 16)),]),
-                Slider(value: streamQuality, min: 50.0, max: 100.0, divisions: 10, activeColor: const Color(0xFFB829EA), onChanged: (value) { setState(() { streamQuality = value; }); }, onChangeEnd: (value) { sendCommand("SET_QUALITY:$value"); }),
+                // 💡 شريط جودة البث مع الحفظ
+                Slider(
+                  value: streamQuality, min: 50.0, max: 100.0, divisions: 10, activeColor: const Color(0xFFB829EA), 
+                  onChanged: (value) { setState(() { streamQuality = value; }); }, 
+                  onChangeEnd: (value) async { 
+                    sendCommand("SET_QUALITY:$value"); 
+                    final prefs = await SharedPreferences.getInstance();
+                    prefs.setDouble('saved_stream_quality', value);
+                  }
+                ),
               ],
             ),
           ),

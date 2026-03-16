@@ -37,6 +37,7 @@ dependencies:
   http: ^0.13.6
   flutter_mjpeg: ^2.0.4
   network_info_plus: ^5.0.0
+  shared_preferences: ^2.5.4
 
 dev_dependencies:
   flutter_test:
