@@ -156,7 +156,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   // ===========================================
-  // 💡 إعداد وتجهيز الاتصال (النسخة الآمنة والذكية مع BytesBuilder)
+  // 💡 إعداد وتجهيز الاتصال (بدون أي تعديل على شكل كودك، فقط السحريات هنا)
   // ===========================================
   void setupConnection(Socket socket, String type) {
     activeSocket = socket;
@@ -216,8 +216,10 @@ class _MainScreenState extends State<MainScreen> {
                   }
               } catch (e) {}
           } else {
-              // 💡 تحديث الإطار ثم إرسال FRAME_ACK فوراً للسماح بالصورة القادمة
-              if (isMonitorMode) { currentFrame.value = frameData; }
+              if (isMonitorMode) { 
+                currentFrame.value = frameData; 
+              }
+              // 💡 هذا هو السطر المهم جداً لسرعة البث وعدم التعليق!
               sendCommand("FRAME_ACK"); 
           }
           
@@ -365,7 +367,15 @@ class _MainScreenState extends State<MainScreen> {
                         valueListenable: currentFrame,
                         builder: (context, frameData, child) {
                           if (frameData == null) return const Text("جاري التقاط البث...", style: TextStyle(color: Colors.white54, fontSize: 16));
-                          return _buildGestureArea(child: Image.memory(frameData, fit: BoxFit.contain, gaplessPlayback: true, width: double.infinity, height: double.infinity));
+                          return _buildGestureArea(
+                            child: Image.memory(
+                              frameData, 
+                              fit: BoxFit.contain, 
+                              gaplessPlayback: true, // 💡 هذا السطر يمنع الوميض ويجعل البث سلساً
+                              width: double.infinity, 
+                              height: double.infinity
+                            )
+                          );
                         },
                       ),
               ),
