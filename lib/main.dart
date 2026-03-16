@@ -228,9 +228,6 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
-  // ===========================================
-  // 💡 إعداد وتجهيز الاتصال (بدون أي مساس بأساس الكود الخاص بك)
-  // ===========================================
   void setupConnection(Socket socket, String type) {
     activeSocket = socket;
     activeSocket!.setOption(SocketOption.tcpNoDelay, true);
@@ -405,15 +402,14 @@ class _MainScreenState extends State<MainScreen> {
             );
           },
         ),
-        // 💡 تعديل زر إغلاق الستريم دك ليصبح واضحاً ويسهل الوصول إليه
+        // 💡 التعديل: زر الإغلاق أصبح "علامة X مجردة" ومكانه دائماً في اليسار
         Positioned(
           top: 25, 
-          left: currentLang == 'ar' ? 25 : null, 
-          right: currentLang == 'en' ? 25 : null, 
-          child: Container(
-            decoration: BoxDecoration(color: Colors.redAccent.withOpacity(0.8), borderRadius: BorderRadius.circular(50), border: Border.all(color: Colors.white, width: 2)), 
-            child: IconButton(icon: const Icon(Icons.close, color: Colors.white, size: 35), onPressed: _exitLandscapeMode)
-          )
+          left: 25, 
+          child: IconButton(
+            icon: const Icon(Icons.close, color: Colors.white, size: 35), 
+            onPressed: _exitLandscapeMode
+          ),
         ),
       ],
     );
@@ -449,14 +445,14 @@ class _MainScreenState extends State<MainScreen> {
                         },
                       ),
               ),
+              // 💡 التعديل: زر الإغلاق للشاشة أصبح "علامة X مجردة" ومكانه دائماً في اليسار
               Positioned(
                 top: 25, 
-                left: currentLang == 'ar' ? 25 : null, 
-                right: currentLang == 'en' ? 25 : null, 
-                child: Container(
-                  decoration: BoxDecoration(color: Colors.redAccent.withOpacity(0.8), borderRadius: BorderRadius.circular(50), border: Border.all(color: Colors.white, width: 2)), 
-                  child: IconButton(icon: const Icon(Icons.close, color: Colors.white, size: 35), onPressed: _exitLandscapeMode)
-                )
+                left: 25, 
+                child: IconButton(
+                  icon: const Icon(Icons.close, color: Colors.white, size: 35), 
+                  onPressed: _exitLandscapeMode
+                ),
               ),
             ],
           ),
@@ -527,10 +523,11 @@ class _MainScreenState extends State<MainScreen> {
               ),
             ),
             
-            // 💡 إخفاء زر الاختصارات الذكي من صفحة الإعدادات فقط (عندما يكون _currentIndex != 4)
+            // 💡 التعديل: زر الاختصارات (البرق) مثبت دائماً في اليمين (right: 25) لتجنب التداخل
             if ((isMonitorMode || _currentIndex == 0 || _currentIndex == 1 || _currentIndex == 2) && _currentIndex != 4)
               Positioned(
-                top: isMonitorMode || _currentIndex == 0 ? 20 : 60, right: currentLang == 'ar' ? null : 20, left: currentLang == 'ar' ? 20 : null,
+                top: isMonitorMode || _currentIndex == 0 ? 25 : 60, 
+                right: 25, 
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
@@ -570,7 +567,6 @@ class _MainScreenState extends State<MainScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // القسم الخاص باللغة وزر المزامنة
           Container(
             padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.3))),
             child: Column(
@@ -585,7 +581,6 @@ class _MainScreenState extends State<MainScreen> {
                 ),
                 if (isConnected) ...[
                   const SizedBox(height: 15),
-                  // 💡 زر המزامنة الذي طلبته داخل تطبيق الجوال
                   ElevatedButton.icon(
                     onPressed: () { sendCommand("REQUEST_SYNC"); }, 
                     icon: const Icon(Icons.sync, color: Colors.white), 
