@@ -5,7 +5,6 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:network_info_plus/network_info_plus.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -98,9 +97,6 @@ class _MainScreenState extends State<MainScreen> {
       "left_click": "يسار",
       "right_click": "يمين",
       "lang_switch": "English",
-      "apple_notice_title": "ملاحظة لمستخدمي iOS:",
-      "apple_notice_desc": "لضمان استقرار الاتصال عبر كابل USB لأجهزة iPhone و iPad، يُشترط تثبيت برنامج iTunes الرسمي على جهاز الكمبيوتر.",
-      "apple_notice_link": "اضغط هنا لتحميل البرنامج من موقع Apple",
       "stream_wait": "جاري التقاط البث..."
     },
     "en": {
@@ -132,9 +128,6 @@ class _MainScreenState extends State<MainScreen> {
       "left_click": "Left",
       "right_click": "Right",
       "lang_switch": "العربية",
-      "apple_notice_title": "iOS Users Notice:",
-      "apple_notice_desc": "For a stable USB connection on iPhone and iPad, the official iTunes software must be installed on your PC.",
-      "apple_notice_link": "Tap here to download from Apple",
       "stream_wait": "Capturing Stream..."
     }
   };
@@ -149,24 +142,28 @@ class _MainScreenState extends State<MainScreen> {
     super.dispose();
   }
 
-  Future<void> _launchUrl(String url) async {
-    if (!await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication)) {
-      debugPrint('Could not launch $url');
-    }
-  }
-
   void updateStatus(String code, Color color) {
-    if (mounted) setState(() { connectionStatusCode = code; statusColor = color; });
+    if (mounted) {
+      setState(() { 
+        connectionStatusCode = code; 
+        statusColor = color; 
+      });
+    }
   }
 
   Future<void> startUsbMode() async {
     manualDisconnect(); 
-    setState(() { currentActiveMode = "usb"; isConnecting = true; });
+    setState(() { 
+      currentActiveMode = "usb"; 
+      isConnecting = true; 
+    });
     updateStatus("status_usb_wait", Colors.orange);
 
     try {
       serverSocket = await ServerSocket.bind(InternetAddress.anyIPv4, 8080);
-      serverSocket!.listen((Socket client) { setupConnection(client, "USB"); });
+      serverSocket!.listen((Socket client) { 
+        setupConnection(client, "USB"); 
+      });
     } catch (e) {
       setState(() => isConnecting = false);
       updateStatus("status_usb_fail", Colors.red);
@@ -175,7 +172,10 @@ class _MainScreenState extends State<MainScreen> {
 
   Future<void> startWifiMode() async {
     manualDisconnect();
-    setState(() { currentActiveMode = "wifi"; isConnecting = true; });
+    setState(() { 
+      currentActiveMode = "wifi"; 
+      isConnecting = true; 
+    });
     updateStatus("status_wifi_wait", Colors.orange);
 
     try {
@@ -183,7 +183,12 @@ class _MainScreenState extends State<MainScreen> {
       for (var interface in await NetworkInterface.list()) {
         for (var addr in interface.addresses) {
           if (addr.type == InternetAddressType.IPv4 && !addr.isLoopback) {
-            if (addr.address.startsWith('192.168.') || addr.address.startsWith('10.') || addr.address.startsWith('172.')) { wifiIP = addr.address; break; }
+            if (addr.address.startsWith('192.168.') || 
+                addr.address.startsWith('10.') || 
+                addr.address.startsWith('172.')) { 
+              wifiIP = addr.address; 
+              break; 
+            }
           }
         }
         if (wifiIP != null) break;
@@ -198,16 +203,20 @@ class _MainScreenState extends State<MainScreen> {
       String subnet = wifiIP.substring(0, wifiIP.lastIndexOf('.'));
       bool found = false;
       int batchSize = 40; 
+      
       for (int i = 1; i < 255; i += batchSize) {
         if (found || isConnected) break;
         List<Future<void>> sweepTasks = [];
+        
         for (int j = i; j < i + batchSize && j < 255; j++) {
           sweepTasks.add(
             Socket.connect('$subnet.$j', 8080, timeout: const Duration(milliseconds: 1000)).then((socket) {
               if (!found && !isConnected) { 
                 found = true; 
                 setupConnection(socket, "Wi-Fi");
-              } else { socket.destroy(); }
+              } else { 
+                socket.destroy(); 
+              }
             }).catchError((_) {}) 
           );
         }
@@ -240,12 +249,20 @@ class _MainScreenState extends State<MainScreen> {
           sendCommand("SET_QUALITY:$streamQuality");
           sendCommand("SET_SENSITIVITY:$mouseSpeed");
           isHandshakeDone = true;
-          if (mounted) setState(() { isConnected = true; isConnecting = false; });
+          
+          if (mounted) {
+            setState(() { 
+              isConnected = true; 
+              isConnecting = false; 
+            });
+          }
           updateStatus("status_connected", Colors.green);
         }
         return;
       }
+      
       buffer.add(data);
+      
       while (true) {
         if (expectedFrameLength == -1) {
           if (buffer.length >= 4) {
@@ -253,55 +270,102 @@ class _MainScreenState extends State<MainScreen> {
             var lengthBytes = Uint8List.view(allBytes.buffer, allBytes.offsetInBytes, 4);
             expectedFrameLength = ByteData.sublistView(lengthBytes).getUint32(0, Endian.big);
             buffer.add(allBytes.sublist(4));
-          } else { break; }
+          } else { 
+            break; 
+          }
         }
+        
         if (expectedFrameLength != -1 && buffer.length >= expectedFrameLength) {
           var allBytes = buffer.takeBytes();
           var frameData = allBytes.sublist(0, expectedFrameLength);
           
-          if (frameData.length > 10 && frameData[0] == 83 && frameData[1] == 89 && frameData[2] == 78 && frameData[3] == 67 && frameData[4] == 95 && frameData[5] == 74 && frameData[6] == 83 && frameData[7] == 79 && frameData[8] == 78 && frameData[9] == 58) {
+          if (frameData.length > 10 && 
+              frameData[0] == 83 && frameData[1] == 89 && 
+              frameData[2] == 78 && frameData[3] == 67 && 
+              frameData[4] == 95 && frameData[5] == 74 && 
+              frameData[6] == 83 && frameData[7] == 79 && 
+              frameData[8] == 78 && frameData[9] == 58) {
+              
               String jsonStr = utf8.decode(frameData.sublist(10));
               try {
                   List<dynamic> parsedApps = jsonDecode(jsonStr);
                   if (mounted) {
-                    setState(() { syncedApps = List<Map<String, dynamic>>.from(parsedApps); });
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t("sync_success")), backgroundColor: Colors.green));
+                    setState(() { 
+                      syncedApps = List<Map<String, dynamic>>.from(parsedApps); 
+                    });
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(t("sync_success")), 
+                        backgroundColor: Colors.green
+                      )
+                    );
                   }
               } catch (e) {}
           } else {
-              if (isMonitorMode) { currentFrame.value = frameData; }
+              if (isMonitorMode) { 
+                currentFrame.value = frameData; 
+              }
               sendCommand("FRAME_ACK"); 
           }
+          
           buffer.add(allBytes.sublist(expectedFrameLength));
           expectedFrameLength = -1; 
-        } else { break; }
+        } else { 
+          break; 
+        }
       }
-    }, onDone: _handleDisconnect, onError: (e) => _handleDisconnect(), cancelOnError: true);
+    }, 
+    onDone: _handleDisconnect, 
+    onError: (e) => _handleDisconnect(), 
+    cancelOnError: true);
   }
 
   void _handleDisconnect() {
-    activeSocket?.close(); activeSocket = null; 
-    serverSocket?.close(); serverSocket = null;
+    activeSocket?.close(); 
+    activeSocket = null; 
+    serverSocket?.close(); 
+    serverSocket = null;
     isHandshakeDone = false;
-    if (mounted) setState(() { 
-      isConnected = false; isConnecting = false;
-      currentFrame.value = null; 
-      currentActiveMode = "none";
-    });
+    
+    if (mounted) {
+      setState(() { 
+        isConnected = false; 
+        isConnecting = false;
+        currentFrame.value = null; 
+        currentActiveMode = "none";
+      });
+    }
     updateStatus("status_disconnected", Colors.grey);
   }
 
-  void manualDisconnect() { if (activeSocket != null) { sendCommand("K_SPACE"); } _handleDisconnect(); }
+  void manualDisconnect() { 
+    if (activeSocket != null) { 
+      sendCommand("K_SPACE"); 
+    } 
+    _handleDisconnect(); 
+  }
 
-  void sendCommand(String cmd) { if (activeSocket != null && isConnected) { try { activeSocket!.write("$cmd\n"); } catch (e) {} } }
+  void sendCommand(String cmd) { 
+    if (activeSocket != null && isConnected) { 
+      try { 
+        activeSocket!.write("$cmd\n"); 
+      } catch (e) {} 
+    } 
+  }
 
   void _throttledMouseMove(double dx, double dy) {
     int now = DateTime.now().millisecondsSinceEpoch;
-    if (now - _lastMouseSendTime > 16) { sendCommand("M_MOVE:$dx:$dy"); _lastMouseSendTime = now; }
+    if (now - _lastMouseSendTime > 16) { 
+      sendCommand("M_MOVE:$dx:$dy"); 
+      _lastMouseSendTime = now; 
+    }
   }
 
   void _exitLandscapeMode() {
-    setState(() { isMonitorMode = false; _currentIndex = 4; });
+    setState(() { 
+      isMonitorMode = false; 
+      _currentIndex = 4; 
+    });
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   }
@@ -309,16 +373,30 @@ class _MainScreenState extends State<MainScreen> {
   Widget _buildGestureArea({required Widget child}) {
     return GestureDetector(
       onScaleUpdate: (details) {
-        if (details.pointerCount == 1) _throttledMouseMove(details.focalPointDelta.dx, details.focalPointDelta.dy);
-        else if (details.pointerCount == 2) {
+        if (details.pointerCount == 1) {
+          _throttledMouseMove(details.focalPointDelta.dx, details.focalPointDelta.dy);
+        } else if (details.pointerCount == 2) {
           int now = DateTime.now().millisecondsSinceEpoch;
-          if (now - _lastMouseSendTime > 30) { sendCommand("M_SCROLL:${details.focalPointDelta.dy}"); _lastMouseSendTime = now; }
+          if (now - _lastMouseSendTime > 30) { 
+            sendCommand("M_SCROLL:${details.focalPointDelta.dy}"); 
+            _lastMouseSendTime = now; 
+          }
         }
       },
-      onTap: () { sendCommand("M_CLICK"); HapticFeedback.selectionClick(); },
-      onDoubleTap: () { sendCommand("M_DCLICK"); HapticFeedback.mediumImpact(); },
+      onTap: () { 
+        sendCommand("M_CLICK"); 
+        HapticFeedback.selectionClick(); 
+      },
+      onDoubleTap: () { 
+        sendCommand("M_DCLICK"); 
+        HapticFeedback.mediumImpact(); 
+      },
       onSecondaryTap: () => sendCommand("M_R_CLICK"),
-      onLongPressStart: (details) { _lastLongPressOffset = Offset.zero; sendCommand("M_L_DOWN"); HapticFeedback.heavyImpact(); },
+      onLongPressStart: (details) { 
+        _lastLongPressOffset = Offset.zero; 
+        sendCommand("M_L_DOWN"); 
+        HapticFeedback.heavyImpact(); 
+      },
       onLongPressMoveUpdate: (details) { 
         if (_lastLongPressOffset != null) {
           double dx = details.localOffsetFromOrigin.dx - _lastLongPressOffset!.dx;
@@ -327,37 +405,79 @@ class _MainScreenState extends State<MainScreen> {
           _throttledMouseMove(dx, dy);
         }
       },
-      onLongPressEnd: (details) { _lastLongPressOffset = null; sendCommand("M_L_UP"); HapticFeedback.selectionClick(); },
+      onLongPressEnd: (details) { 
+        _lastLongPressOffset = null; 
+        sendCommand("M_L_UP"); 
+        HapticFeedback.selectionClick(); 
+      },
       child: child,
     );
   }
 
   Widget _buildStreamDeckScreen() {
-    if (syncedApps.isEmpty) { return Center(child: Text(t("no_apps"), textAlign: TextAlign.center, style: const TextStyle(color: Colors.white54, fontSize: 16))); }
+    if (syncedApps.isEmpty) { 
+      return Center(
+        child: Text(
+          t("no_apps"), 
+          textAlign: TextAlign.center, 
+          style: const TextStyle(color: Colors.white54, fontSize: 16)
+        )
+      ); 
+    }
+    
     return Stack(
       children: [
         GridView.builder(
           padding: const EdgeInsets.only(top: 80, left: 20, right: 20, bottom: 20),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 5, childAspectRatio: 0.9, mainAxisSpacing: 20, crossAxisSpacing: 20),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 5, 
+            childAspectRatio: 0.9, 
+            mainAxisSpacing: 20, 
+            crossAxisSpacing: 20
+          ),
           itemCount: syncedApps.length,
           itemBuilder: (context, index) {
             final app = syncedApps[index];
             bool hasIcon = app['icon'] != null && app['icon'].toString().isNotEmpty;
+            
             return Material(
               color: const Color(0xFF15161E),
               borderRadius: BorderRadius.circular(15),
               child: InkWell(
                 borderRadius: BorderRadius.circular(15),
-                onTap: () { sendCommand("LAUNCH:${app['path']}"); HapticFeedback.heavyImpact(); },
+                onTap: () { 
+                  sendCommand("LAUNCH:${app['path']}"); 
+                  HapticFeedback.heavyImpact(); 
+                },
                 child: Container(
-                  decoration: BoxDecoration(borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.5)), boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 5)]),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(15), 
+                    border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.5)), 
+                    boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 5)]
+                  ),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      if (hasIcon) ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.memory(base64Decode(app['icon']), width: 45, height: 45, fit: BoxFit.cover, gaplessPlayback: true)) 
-                      else const Icon(Icons.apps, size: 45, color: Colors.white54),
+                      if (hasIcon) 
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(8), 
+                          child: Image.memory(
+                            base64Decode(app['icon']), 
+                            width: 45, 
+                            height: 45, 
+                            fit: BoxFit.cover, 
+                            gaplessPlayback: true
+                          )
+                        ) 
+                      else 
+                        const Icon(Icons.apps, size: 45, color: Colors.white54),
+                      
                       const SizedBox(height: 10), 
-                      Text(app['name'] ?? '', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
+                      Text(
+                        app['name'] ?? '', 
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold), 
+                        overflow: TextOverflow.ellipsis
+                      ),
                     ],
                   ),
                 ),
@@ -365,12 +485,21 @@ class _MainScreenState extends State<MainScreen> {
             );
           },
         ),
-        // 🚀 زر الخروج المحدث والواضح للستريم دك
+        // زر إغلاق شاشة الستريم دك
         Positioned(
-          top: 25, left: currentLang == 'ar' ? 25 : null, right: currentLang == 'en' ? 25 : null, 
+          top: 25, 
+          left: currentLang == 'ar' ? 25 : null, 
+          right: currentLang == 'en' ? 25 : null, 
           child: Container(
-            decoration: BoxDecoration(color: Colors.redAccent.withOpacity(0.8), borderRadius: BorderRadius.circular(50), border: Border.all(color: Colors.white, width: 2)), 
-            child: IconButton(icon: const Icon(Icons.close, color: Colors.white, size: 35), onPressed: _exitLandscapeMode)
+            decoration: BoxDecoration(
+              color: Colors.redAccent.withOpacity(0.8), 
+              borderRadius: BorderRadius.circular(50), 
+              border: Border.all(color: Colors.white, width: 2)
+            ), 
+            child: IconButton(
+              icon: const Icon(Icons.close, color: Colors.white, size: 35), 
+              onPressed: _exitLandscapeMode
+            )
           )
         ),
       ],
@@ -386,7 +515,8 @@ class _MainScreenState extends State<MainScreen> {
 
     if (isMonitorMode || _currentIndex == 0) {
       activeScreen = Scaffold(
-        resizeToAvoidBottomInset: false, backgroundColor: Colors.black,
+        resizeToAvoidBottomInset: false, 
+        backgroundColor: Colors.black,
         body: SafeArea(
           left: false, right: false, top: false, bottom: false,
           child: _currentIndex == 0 ? _buildStreamDeckScreen() : Stack(
@@ -397,14 +527,37 @@ class _MainScreenState extends State<MainScreen> {
                     : ValueListenableBuilder<Uint8List?>(
                         valueListenable: currentFrame,
                         builder: (context, frameData, child) {
-                          if (frameData == null) return Text(t("stream_wait"), style: const TextStyle(color: Colors.white54, fontSize: 16));
+                          if (frameData == null) {
+                            return Text(t("stream_wait"), style: const TextStyle(color: Colors.white54, fontSize: 16));
+                          }
                           return _buildGestureArea(
-                            child: Image.memory(frameData, fit: BoxFit.contain, gaplessPlayback: true, width: double.infinity, height: double.infinity)
+                            child: Image.memory(
+                              frameData, 
+                              fit: BoxFit.contain, 
+                              gaplessPlayback: true, 
+                              width: double.infinity, 
+                              height: double.infinity
+                            )
                           );
                         },
                       ),
               ),
-              Positioned(top: 25, left: currentLang == 'ar' ? 25 : null, right: currentLang == 'en' ? 25 : null, child: Container(decoration: BoxDecoration(color: Colors.redAccent.withOpacity(0.8), borderRadius: BorderRadius.circular(50), border: Border.all(color: Colors.white, width: 2)), child: IconButton(icon: const Icon(Icons.close, color: Colors.white, size: 35), onPressed: _exitLandscapeMode))),
+              Positioned(
+                top: 25, 
+                left: currentLang == 'ar' ? 25 : null, 
+                right: currentLang == 'en' ? 25 : null, 
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.redAccent.withOpacity(0.8), 
+                    borderRadius: BorderRadius.circular(50), 
+                    border: Border.all(color: Colors.white, width: 2)
+                  ), 
+                  child: IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white, size: 35), 
+                    onPressed: _exitLandscapeMode
+                  )
+                )
+              ),
             ],
           ),
         ),
@@ -412,19 +565,46 @@ class _MainScreenState extends State<MainScreen> {
     } else {
       activeScreen = Scaffold(
         resizeToAvoidBottomInset: false, 
-        appBar: AppBar(backgroundColor: const Color(0xFF15161E), title: Text(t("app_name"), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), centerTitle: true),
-        body: IndexedStack(index: _currentIndex, children: [const SizedBox(), _buildMediaScreen(), _buildMouseScreen(), const SizedBox(), _buildSettingsScreen()]),
+        appBar: AppBar(
+          backgroundColor: const Color(0xFF15161E), 
+          title: Text(t("app_name"), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), 
+          centerTitle: true
+        ),
+        body: IndexedStack(
+          index: _currentIndex, 
+          children: [
+            const SizedBox(), 
+            _buildMediaScreen(), 
+            _buildMouseScreen(), 
+            const SizedBox(), 
+            _buildSettingsScreen()
+          ]
+        ),
         bottomNavigationBar: BottomNavigationBar(
-          backgroundColor: const Color(0xFF15161E), selectedItemColor: const Color(0xFFB829EA), unselectedItemColor: const Color(0xFF888B94), type: BottomNavigationBarType.fixed, currentIndex: _currentIndex,
+          backgroundColor: const Color(0xFF15161E), 
+          selectedItemColor: const Color(0xFFB829EA), 
+          unselectedItemColor: const Color(0xFF888B94), 
+          type: BottomNavigationBarType.fixed, 
+          currentIndex: _currentIndex,
           onTap: (index) {
             if (index == 0 || index == 3) {
               sendCommand("FORCE_FRAME");
               setState(() => _currentIndex = index); 
-              if(index == 3) setState(() { isMonitorMode = true; });
-              SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]); SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+              if (index == 3) {
+                setState(() { isMonitorMode = true; });
+              }
+              SystemChrome.setPreferredOrientations([
+                DeviceOrientation.landscapeLeft, 
+                DeviceOrientation.landscapeRight
+              ]); 
+              SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
             } else { 
-              setState(() { _currentIndex = index; isMonitorMode = false; }); 
-              SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]); SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+              setState(() { 
+                _currentIndex = index; 
+                isMonitorMode = false; 
+              }); 
+              SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]); 
+              SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
             }
           },
           items: [
@@ -445,8 +625,14 @@ class _MainScreenState extends State<MainScreen> {
         child: Stack(
           children: [
             GestureDetector(
-              onTap: () { if (isKeyboardOpen || _keyboardFocus.hasFocus) { FocusManager.instance.primaryFocus?.unfocus(); SystemChannels.textInput.invokeMethod('TextInput.hide'); } },
-              behavior: HitTestBehavior.translucent, child: activeScreen,
+              onTap: () { 
+                if (isKeyboardOpen || _keyboardFocus.hasFocus) { 
+                  FocusManager.instance.primaryFocus?.unfocus(); 
+                  SystemChannels.textInput.invokeMethod('TextInput.hide'); 
+                } 
+              },
+              behavior: HitTestBehavior.translucent, 
+              child: activeScreen,
             ),
             
             Positioned(
@@ -456,17 +642,30 @@ class _MainScreenState extends State<MainScreen> {
                 child: SizedBox(
                   width: 1, height: 1,
                   child: TextField(
-                    controller: _keyboardController, focusNode: _keyboardFocus, autocorrect: false, enableSuggestions: false, keyboardType: TextInputType.multiline, maxLines: null,
+                    controller: _keyboardController, 
+                    focusNode: _keyboardFocus, 
+                    autocorrect: false, 
+                    enableSuggestions: false, 
+                    keyboardType: TextInputType.multiline, 
+                    maxLines: null,
                     onChanged: (text) {
                       if (text.isNotEmpty && text.length > _lastText.length) {
                         String newChars = text.substring(_lastText.length);
                         for (int i = 0; i < newChars.length; i++) {
                           String char = newChars[i];
-                          if (char == " ") sendCommand("K_SPACE"); 
-                          else if (char == "\n") sendCommand("K_ENTER"); 
-                          else sendCommand("K_TYPE:$char");
+                          if (char == " ") {
+                            sendCommand("K_SPACE"); 
+                          } else if (char == "\n") {
+                            sendCommand("K_ENTER"); 
+                          } else {
+                            sendCommand("K_TYPE:$char");
+                          }
                         }
-                      } else if (text.length < _lastText.length) { for (int i = 0; i < (_lastText.length - text.length); i++) sendCommand("K_BACK"); }
+                      } else if (text.length < _lastText.length) { 
+                        for (int i = 0; i < (_lastText.length - text.length); i++) {
+                          sendCommand("K_BACK"); 
+                        }
+                      }
                       _lastText = text;
                     },
                   ),
@@ -474,29 +673,63 @@ class _MainScreenState extends State<MainScreen> {
               ),
             ),
             
-            // 🚀 زر الاختصارات الذكي (يختفي في صفحة الإعدادات فقط)
+            // 💡 زر الاختصارات يظهر فقط إذا لم نكن في شاشة الإعدادات (_currentIndex != 4)
             if ((isMonitorMode || _currentIndex == 0 || _currentIndex == 1 || _currentIndex == 2) && _currentIndex != 4)
               Positioned(
-                top: isMonitorMode || _currentIndex == 0 ? 20 : 60, right: currentLang == 'ar' ? null : 20, left: currentLang == 'ar' ? 20 : null,
+                top: isMonitorMode || _currentIndex == 0 ? 20 : 60, 
+                right: currentLang == 'ar' ? null : 20, 
+                left: currentLang == 'ar' ? 20 : null,
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     if (_isQuickBarOpen)
                       Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 10), padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 0),
-                        decoration: BoxDecoration(color: const Color(0xFF15161E).withOpacity(0.8), borderRadius: BorderRadius.circular(25), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.5), width: 1.5), boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10)]),
+                        margin: const EdgeInsets.symmetric(horizontal: 10), 
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 0),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF15161E).withOpacity(0.8), 
+                          borderRadius: BorderRadius.circular(25), 
+                          border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.5), width: 1.5), 
+                          boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10)]
+                        ),
                         child: Row(
                           children: [
-                            IconButton(icon: const Icon(Icons.monitor, color: Colors.white70, size: 22), onPressed: () { sendCommand("FORCE_FRAME"); sendCommand("TOGGLE_SCREEN"); HapticFeedback.heavyImpact(); }),
-                            IconButton(icon: const Icon(Icons.keyboard, color: Colors.white70, size: 22), onPressed: () { if (isKeyboardOpen || _keyboardFocus.hasFocus) { FocusManager.instance.primaryFocus?.unfocus(); SystemChannels.textInput.invokeMethod('TextInput.hide'); } else { _keyboardFocus.requestFocus(); SystemChannels.textInput.invokeMethod('TextInput.show'); } HapticFeedback.lightImpact(); }),
-                            _quickBtn(Icons.copy, 'HOTKEY:ctrl+c'), _quickBtn(Icons.paste, 'HOTKEY:ctrl+v'), _quickBtn(Icons.cut, 'HOTKEY:ctrl+x'), _quickBtn(Icons.undo, 'HOTKEY:ctrl+z'),
+                            IconButton(
+                              icon: const Icon(Icons.monitor, color: Colors.white70, size: 22), 
+                              onPressed: () { 
+                                sendCommand("FORCE_FRAME"); 
+                                sendCommand("TOGGLE_SCREEN"); 
+                                HapticFeedback.heavyImpact(); 
+                              }
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.keyboard, color: Colors.white70, size: 22), 
+                              onPressed: () { 
+                                if (isKeyboardOpen || _keyboardFocus.hasFocus) { 
+                                  FocusManager.instance.primaryFocus?.unfocus(); 
+                                  SystemChannels.textInput.invokeMethod('TextInput.hide'); 
+                                } else { 
+                                  _keyboardFocus.requestFocus(); 
+                                  SystemChannels.textInput.invokeMethod('TextInput.show'); 
+                                } 
+                                HapticFeedback.lightImpact(); 
+                              }
+                            ),
+                            _quickBtn(Icons.copy, 'HOTKEY:ctrl+c'), 
+                            _quickBtn(Icons.paste, 'HOTKEY:ctrl+v'), 
+                            _quickBtn(Icons.cut, 'HOTKEY:ctrl+x'), 
+                            _quickBtn(Icons.undo, 'HOTKEY:ctrl+z'),
                           ],
                         ),
                       ),
                     FloatingActionButton(
-                      mini: true, elevation: 0,
-                      backgroundColor: _isQuickBarOpen ? const Color(0xFF222533).withOpacity(0.7) : const Color(0xFFB829EA).withOpacity(0.6),
-                      onPressed: () => setState(() => _isQuickBarOpen = !_isQuickBarOpen), child: Icon(_isQuickBarOpen ? Icons.close : Icons.bolt, color: Colors.white),
+                      mini: true, 
+                      elevation: 0,
+                      backgroundColor: _isQuickBarOpen 
+                          ? const Color(0xFF222533).withOpacity(0.7) 
+                          : const Color(0xFFB829EA).withOpacity(0.6),
+                      onPressed: () => setState(() => _isQuickBarOpen = !_isQuickBarOpen), 
+                      child: Icon(_isQuickBarOpen ? Icons.close : Icons.bolt, color: Colors.white),
                     ),
                   ],
                 ),
@@ -508,7 +741,13 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Widget _quickBtn(IconData icon, String cmd) {
-    return IconButton(icon: Icon(icon, color: Colors.white70, size: 22), onPressed: () { sendCommand(cmd); HapticFeedback.lightImpact(); });
+    return IconButton(
+      icon: Icon(icon, color: Colors.white70, size: 22), 
+      onPressed: () { 
+        sendCommand(cmd); 
+        HapticFeedback.lightImpact(); 
+      }
+    );
   }
 
   Widget _buildSettingsScreen() {
@@ -517,18 +756,30 @@ class _MainScreenState extends State<MainScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 🚀 الإعدادات العامة (اللغات والمزامنة)
           Container(
-            padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.3))),
+            padding: const EdgeInsets.all(20), 
+            decoration: BoxDecoration(
+              color: const Color(0xFF15161E), 
+              borderRadius: BorderRadius.circular(15), 
+              border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.3))
+            ),
             child: Column(
               children: [
                 Text(t("settings_general"), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
                 const SizedBox(height: 15),
                 ElevatedButton.icon(
-                  onPressed: () { setState(() { currentLang = currentLang == 'ar' ? 'en' : 'ar'; }); }, 
+                  onPressed: () { 
+                    setState(() { 
+                      currentLang = currentLang == 'ar' ? 'en' : 'ar'; 
+                    }); 
+                  }, 
                   icon: const Icon(Icons.language, color: Colors.white), 
                   label: Text(t("lang_switch"), style: const TextStyle(fontSize: 16)),
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF222533), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF222533), 
+                    foregroundColor: Colors.white, 
+                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20)
+                  ),
                 ),
                 if (isConnected) ...[
                   const SizedBox(height: 15),
@@ -536,7 +787,11 @@ class _MainScreenState extends State<MainScreen> {
                     onPressed: () { sendCommand("REQUEST_SYNC"); }, 
                     icon: const Icon(Icons.sync, color: Colors.white), 
                     label: Text(t("sync_apps_btn"), style: const TextStyle(fontSize: 14)),
-                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFB829EA).withOpacity(0.7), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFB829EA).withOpacity(0.7), 
+                      foregroundColor: Colors.white, 
+                      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20)
+                    ),
                   ),
                 ]
               ],
@@ -544,14 +799,22 @@ class _MainScreenState extends State<MainScreen> {
           ),
           const SizedBox(height: 25),
 
-          // إدارة الاتصال
           Container(
-            padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.3))),
+            padding: const EdgeInsets.all(20), 
+            decoration: BoxDecoration(
+              color: const Color(0xFF15161E), 
+              borderRadius: BorderRadius.circular(15), 
+              border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.3))
+            ),
             child: Column(
               children: [
                 Text(t("settings_conn"), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
                 const SizedBox(height: 15),
-                Text(t(connectionStatusCode), textAlign: TextAlign.center, style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 14)),
+                Text(
+                  t(connectionStatusCode), 
+                  textAlign: TextAlign.center, 
+                  style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 14)
+                ),
                 const SizedBox(height: 20),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -561,7 +824,12 @@ class _MainScreenState extends State<MainScreen> {
                         onPressed: (isConnected && currentActiveMode == "wifi") ? null : startWifiMode,
                         icon: const Icon(Icons.wifi, color: Colors.white),
                         label: const Text('Wi-Fi', style: TextStyle(fontSize: 16)),
-                        style: ElevatedButton.styleFrom(backgroundColor: currentActiveMode == "wifi" ? Colors.green : const Color(0xFF222533), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: currentActiveMode == "wifi" ? Colors.green : const Color(0xFF222533), 
+                          foregroundColor: Colors.white, 
+                          padding: const EdgeInsets.symmetric(vertical: 12), 
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))
+                        ),
                       ),
                     ),
                     const SizedBox(width: 15),
@@ -570,39 +838,28 @@ class _MainScreenState extends State<MainScreen> {
                         onPressed: (isConnected && currentActiveMode == "usb") ? null : startUsbMode,
                         icon: const Icon(Icons.usb, color: Colors.white),
                         label: const Text('USB', style: TextStyle(fontSize: 16)),
-                        style: ElevatedButton.styleFrom(backgroundColor: currentActiveMode == "usb" ? const Color(0xFFB829EA) : const Color(0xFF222533), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: currentActiveMode == "usb" ? const Color(0xFFB829EA) : const Color(0xFF222533), 
+                          foregroundColor: Colors.white, 
+                          padding: const EdgeInsets.symmetric(vertical: 12), 
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))
+                        ),
                       ),
                     ),
                   ],
                 ),
                 
-                // 🚀 رسالة أبل الأنيقة تظهر فقط عند اختيار USB
-                if (currentActiveMode == "usb") ...[
-                  const SizedBox(height: 20),
-                  Container(
-                    padding: const EdgeInsets.all(15),
-                    decoration: BoxDecoration(color: Colors.blueAccent.withOpacity(0.1), borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.blueAccent.withOpacity(0.5))),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(children: [const Icon(Icons.apple, color: Colors.white), const SizedBox(width: 8), Text(t("apple_notice_title"), style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white))]),
-                        const SizedBox(height: 8),
-                        Text(t("apple_notice_desc"), style: const TextStyle(fontSize: 12, color: Colors.white70)),
-                        const SizedBox(height: 10),
-                        InkWell(
-                          onTap: () => _launchUrl("https://support.apple.com/en-sa/106372"),
-                          child: Text(t("apple_notice_link"), style: const TextStyle(fontSize: 12, color: Colors.blueAccent, decoration: TextDecoration.underline, fontWeight: FontWeight.bold)),
-                        )
-                      ],
-                    ),
-                  )
-                ],
-
                 if (isConnected) ...[
-                  const SizedBox(height: 15),
+                  const SizedBox(height: 20),
                   ElevatedButton.icon(
-                    onPressed: manualDisconnect, icon: const Icon(Icons.power_settings_new, color: Colors.white), label: Text(t("btn_disconnect"), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 10)),
+                    onPressed: manualDisconnect, 
+                    icon: const Icon(Icons.power_settings_new, color: Colors.white), 
+                    label: Text(t("btn_disconnect"), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.redAccent, 
+                      foregroundColor: Colors.white, 
+                      padding: const EdgeInsets.symmetric(vertical: 10)
+                    ),
                   ),
                 ]
               ],
@@ -610,16 +867,60 @@ class _MainScreenState extends State<MainScreen> {
           ),
           const SizedBox(height: 25),
           Container(
-            padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.3))),
+            padding: const EdgeInsets.all(20), 
+            decoration: BoxDecoration(
+              color: const Color(0xFF15161E), 
+              borderRadius: BorderRadius.circular(15), 
+              border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.3))
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Center(child: Text(t("settings_perf"), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white))), const SizedBox(height: 20),
-                Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(t("mouse_speed"), style: const TextStyle(color: Colors.white70, fontSize: 16)), Text(mouseSpeed.toStringAsFixed(1), style: const TextStyle(color: Color(0xFFB829EA), fontWeight: FontWeight.bold, fontSize: 16)),]),
-                Slider(value: mouseSpeed, min: 1.0, max: 10.0, divisions: 18, activeColor: const Color(0xFFB829EA), onChanged: (value) { setState(() { mouseSpeed = value; }); }, onChangeEnd: (value) { sendCommand("SET_SENSITIVITY:$value"); }),
+                Center(
+                  child: Text(t("settings_perf"), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white))
+                ), 
+                const SizedBox(height: 20),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween, 
+                  children: [
+                    Text(t("mouse_speed"), style: const TextStyle(color: Colors.white70, fontSize: 16)), 
+                    Text(mouseSpeed.toStringAsFixed(1), style: const TextStyle(color: Color(0xFFB829EA), fontWeight: FontWeight.bold, fontSize: 16)),
+                  ]
+                ),
+                Slider(
+                  value: mouseSpeed, 
+                  min: 1.0, 
+                  max: 10.0, 
+                  divisions: 18, 
+                  activeColor: const Color(0xFFB829EA), 
+                  onChanged: (value) { 
+                    setState(() { mouseSpeed = value; }); 
+                  }, 
+                  onChangeEnd: (value) { 
+                    sendCommand("SET_SENSITIVITY:$value"); 
+                  }
+                ),
                 const SizedBox(height: 15),
-                Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(t("stream_quality"), style: const TextStyle(color: Colors.white70, fontSize: 16)), Text("${streamQuality.toInt()}%", style: const TextStyle(color: Color(0xFFB829EA), fontWeight: FontWeight.bold, fontSize: 16)),]),
-                Slider(value: streamQuality, min: 50.0, max: 100.0, divisions: 10, activeColor: const Color(0xFFB829EA), onChanged: (value) { setState(() { streamQuality = value; }); }, onChangeEnd: (value) { sendCommand("SET_QUALITY:$value"); }),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween, 
+                  children: [
+                    Text(t("stream_quality"), style: const TextStyle(color: Colors.white70, fontSize: 16)), 
+                    Text("${streamQuality.toInt()}%", style: const TextStyle(color: Color(0xFFB829EA), fontWeight: FontWeight.bold, fontSize: 16)),
+                  ]
+                ),
+                Slider(
+                  value: streamQuality, 
+                  min: 50.0, 
+                  max: 100.0, 
+                  divisions: 10, 
+                  activeColor: const Color(0xFFB829EA), 
+                  onChanged: (value) { 
+                    setState(() { streamQuality = value; }); 
+                  }, 
+                  onChangeEnd: (value) { 
+                    sendCommand("SET_QUALITY:$value"); 
+                  }
+                ),
               ],
             ),
           ),
@@ -630,33 +931,63 @@ class _MainScreenState extends State<MainScreen> {
 
   Widget _buildMediaScreen() {
     return GridView.count(
-      crossAxisCount: 3, childAspectRatio: 1.2, padding: const EdgeInsets.all(15), mainAxisSpacing: 15, crossAxisSpacing: 15, 
+      crossAxisCount: 3, 
+      childAspectRatio: 1.2, 
+      padding: const EdgeInsets.all(15), 
+      mainAxisSpacing: 15, 
+      crossAxisSpacing: 15, 
       children: [
-        _buildMediaBtn(Icons.volume_off, 'VOL_MUTE'), _buildMediaBtn(Icons.play_arrow, 'MEDIA_PLAY_PAUSE'), _buildContinuousMediaBtn(Icons.volume_up, 'VOL_UP'), 
-        _buildMediaBtn(Icons.skip_previous, 'MEDIA_PREV'), _buildMediaBtn(Icons.skip_next, 'MEDIA_NEXT'), _buildContinuousMediaBtn(Icons.volume_down, 'VOL_DOWN')
+        _buildMediaBtn(Icons.volume_off, 'VOL_MUTE'), 
+        _buildMediaBtn(Icons.play_arrow, 'MEDIA_PLAY_PAUSE'), 
+        _buildContinuousMediaBtn(Icons.volume_up, 'VOL_UP'), 
+        _buildMediaBtn(Icons.skip_previous, 'MEDIA_PREV'), 
+        _buildMediaBtn(Icons.skip_next, 'MEDIA_NEXT'), 
+        _buildContinuousMediaBtn(Icons.volume_down, 'VOL_DOWN')
       ]
     );
   }
 
   Widget _buildMediaBtn(IconData i, String c) { 
     return Material(
-      color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15),
+      color: const Color(0xFF15161E), 
+      borderRadius: BorderRadius.circular(15),
       child: InkWell(
         borderRadius: BorderRadius.circular(15),
-        onTap: () { sendCommand(c); HapticFeedback.lightImpact(); }, 
-        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(i, size: 35, color: const Color(0xFFB829EA))])
+        onTap: () { 
+          sendCommand(c); 
+          HapticFeedback.lightImpact(); 
+        }, 
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center, 
+          children: [
+            Icon(i, size: 35, color: const Color(0xFFB829EA))
+          ]
+        )
       )
     ); 
   }
   
   Widget _buildContinuousMediaBtn(IconData i, String c) { 
     return Material(
-      color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15),
+      color: const Color(0xFF15161E), 
+      borderRadius: BorderRadius.circular(15),
       child: InkWell(
         borderRadius: BorderRadius.circular(15),
-        onTapDown: (_) { sendCommand(c); HapticFeedback.lightImpact(); _volumeTimer = Timer.periodic(const Duration(milliseconds: 150), (timer) { sendCommand(c); }); }, 
-        onTapUp: (_) => _volumeTimer?.cancel(), onTapCancel: () => _volumeTimer?.cancel(), 
-        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(i, size: 35, color: const Color(0xFFB829EA))])
+        onTapDown: (_) { 
+          sendCommand(c); 
+          HapticFeedback.lightImpact(); 
+          _volumeTimer = Timer.periodic(const Duration(milliseconds: 150), (timer) { 
+            sendCommand(c); 
+          }); 
+        }, 
+        onTapUp: (_) => _volumeTimer?.cancel(), 
+        onTapCancel: () => _volumeTimer?.cancel(), 
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center, 
+          children: [
+            Icon(i, size: 35, color: const Color(0xFFB829EA))
+          ]
+        )
       )
     ); 
   }
@@ -665,12 +996,26 @@ class _MainScreenState extends State<MainScreen> {
     return Padding(
       padding: const EdgeInsets.all(20.0),
       child: Container(
-        decoration: BoxDecoration(color: const Color(0xFF1E1F29), borderRadius: BorderRadius.circular(15), boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 5))]),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E1F29), 
+          borderRadius: BorderRadius.circular(15), 
+          boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 5))]
+        ),
         child: Column(
           children: [
             Expanded(
               child: _buildGestureArea(
-                child: Container(color: Colors.transparent, width: double.infinity, child: Center(child: Text(t("mouse_hint"), textAlign: TextAlign.center, style: const TextStyle(color: Colors.white30, fontSize: 16))))
+                child: Container(
+                  color: Colors.transparent, 
+                  width: double.infinity, 
+                  child: Center(
+                    child: Text(
+                      t("mouse_hint"), 
+                      textAlign: TextAlign.center, 
+                      style: const TextStyle(color: Colors.white30, fontSize: 16)
+                    )
+                  )
+                )
               )
             ),
             Container(height: 1, color: Colors.white12), 
@@ -689,12 +1034,31 @@ class _MainScreenState extends State<MainScreen> {
   
   Widget _mouseBtn(String t, String down, String up, bool isLeft) { 
     return Material(
-      color: Colors.transparent, borderRadius: BorderRadius.only(bottomLeft: Radius.circular(isLeft ? 15 : 0), bottomRight: Radius.circular(isLeft ? 0 : 15)),
+      color: Colors.transparent, 
+      borderRadius: BorderRadius.only(
+        bottomLeft: Radius.circular(isLeft ? 15 : 0), 
+        bottomRight: Radius.circular(isLeft ? 0 : 15)
+      ),
       child: InkWell(
-        borderRadius: BorderRadius.only(bottomLeft: Radius.circular(isLeft ? 15 : 0), bottomRight: Radius.circular(isLeft ? 0 : 15)),
-        onTapDown: (_) { sendCommand(down); HapticFeedback.selectionClick(); }, 
-        onTapUp: (_) => sendCommand(up), onTapCancel: () => sendCommand(up),
-        child: Container(padding: const EdgeInsets.symmetric(vertical: 15), child: Center(child: Text(t, style: const TextStyle(fontSize: 14, color: Colors.white70, fontWeight: FontWeight.bold))))
+        borderRadius: BorderRadius.only(
+          bottomLeft: Radius.circular(isLeft ? 15 : 0), 
+          bottomRight: Radius.circular(isLeft ? 0 : 15)
+        ),
+        onTapDown: (_) { 
+          sendCommand(down); 
+          HapticFeedback.selectionClick(); 
+        }, 
+        onTapUp: (_) => sendCommand(up), 
+        onTapCancel: () => sendCommand(up),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 15), 
+          child: Center(
+            child: Text(
+              t, 
+              style: const TextStyle(fontSize: 14, color: Colors.white70, fontWeight: FontWeight.bold)
+            )
+          )
+        )
       )
     ); 
   }
