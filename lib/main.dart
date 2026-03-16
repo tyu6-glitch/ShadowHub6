@@ -103,23 +103,25 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   // ===========================================
-  // 2. الاتصال عبر Wi-Fi
+  // 2. الاتصال عبر Wi-Fi (معدل بنظام الدفعات الذكي للأندرويد)
   // ===========================================
   Future<void> startWifiMode() async {
     manualDisconnect();
     setState(() {
       currentActiveMode = "wifi";
       isConnecting = true;
-      connectionStatus = "جاري مسح شبكة الـ Wi-Fi للبحث عن الكمبيوتر 📡...";
+      connectionStatus = "جاري تجهيز رادار الشبكة 📡...";
       statusColor = Colors.orange;
     });
 
     try {
       String? wifiIP;
+      // جلب عنوان الجوال في الشبكة المحلية
       for (var interface in await NetworkInterface.list()) {
         for (var addr in interface.addresses) {
           if (addr.type == InternetAddressType.IPv4 && !addr.isLoopback) {
-            if (addr.address.startsWith('192.168.') || addr.address.startsWith('10.')) {
+            // يشمل أغلب النطاقات للراوترات المنزلية
+            if (addr.address.startsWith('192.168.') || addr.address.startsWith('10.') || addr.address.startsWith('172.')) {
               wifiIP = addr.address;
               break;
             }
@@ -129,32 +131,44 @@ class _MainScreenState extends State<MainScreen> {
       }
 
       if (wifiIP == null) {
-        setState(() { isConnecting = false; connectionStatus = "تأكد من اتصال الجوال بالواي فاي!"; statusColor = Colors.red; });
+        setState(() { isConnecting = false; connectionStatus = "تأكد من اتصال الجوال بالواي فاي (وليس البيانات)!"; statusColor = Colors.red; });
         return;
       }
 
       String subnet = wifiIP.substring(0, wifiIP.lastIndexOf('.'));
+      setState(() { connectionStatus = "جاري البحث في شبكتك ($subnet.x) 🔍..."; });
+
       bool found = false;
-      List<Future<void>> sweepTasks = [];
-      
-      for (int i = 1; i < 255; i++) {
-        sweepTasks.add(
-          Socket.connect('$subnet.$i', 8080, timeout: const Duration(milliseconds: 1500)).then((socket) {
-            if (!found && !isConnected) { 
-              found = true; 
-              setupConnection(socket, "الـ Wi-Fi 📶");
-            } else { socket.destroy(); }
-          }).catchError((_) {})
-        );
+
+      // تقسيم البحث إلى دفعات (40 طلب في كل دفعة) لمنع الأندرويد من حظر الاتصال
+      int batchSize = 40; 
+      for (int i = 1; i < 255; i += batchSize) {
+        if (found || isConnected) break;
+        
+        List<Future<void>> sweepTasks = [];
+        for (int j = i; j < i + batchSize && j < 255; j++) {
+          sweepTasks.add(
+            Socket.connect('$subnet.$j', 8080, timeout: const Duration(milliseconds: 1000)).then((socket) {
+              if (!found && !isConnected) { 
+                found = true; 
+                setupConnection(socket, "الـ Wi-Fi 📶 ($subnet.$j)");
+              } else { socket.destroy(); }
+            }).catchError((_) {}) // تجاهل الأخطاء بصمت للأجهزة غير المتوفرة
+          );
+        }
+        
+        // ننتظر هذه الدفعة حتى تنتهي (ثانية واحدة كحد أقصى)
+        await Future.wait(sweepTasks);
+        
+        // تأخير بسيط جداً لإعطاء النظام فرصة لالتقاط الأنفاس قبل الدفعة التالية
+        await Future.delayed(const Duration(milliseconds: 50));
       }
-      
-      await Future.wait(sweepTasks).timeout(const Duration(milliseconds: 2000), onTimeout: () => []);
       
       if (!found && mounted && !isConnected) {
-        setState(() { isConnecting = false; connectionStatus = "لم يتم العثور على الكمبيوتر في الشبكة."; statusColor = Colors.red; });
+        setState(() { isConnecting = false; connectionStatus = "لم يتم العثور على الكمبيوتر، تأكد من جدار الحماية."; statusColor = Colors.red; });
       }
     } catch (e) {
-      setState(() { isConnecting = false; connectionStatus = "حدث خطأ أثناء البحث: $e"; statusColor = Colors.red; });
+      setState(() { isConnecting = false; connectionStatus = "حدث خطأ غير متوقع: $e"; statusColor = Colors.red; });
     }
   }
 
