@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'dart:io';
+import 'dart:convert';
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:flutter/services.dart';
-import 'package:flutter_vlc_player/flutter_vlc_player.dart'; // 💡 الإضافة الوحيدة لتشغيل البث الجديد
+import 'package:network_info_plus/network_info_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_vlc_player/flutter_vlc_player.dart'; // 💡 تم إضافة مشغل الفيديو
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -35,122 +39,635 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
-  Socket? socket;
-  VlcPlayerController? _vlcViewController;
-  bool isConnected = false;
+  int _currentIndex = 4;
+  List<Map<String, dynamic>> syncedApps = []; 
+  
+  final TextEditingController _keyboardController = TextEditingController();
+  final FocusNode _keyboardFocus = FocusNode();
+  String _lastText = ""; 
 
-  // دالة افتراضية للترجمة بناءً على كودك
-  String t(String key) {
-    if (key == "mouse_hint") return "حرك إصبعك هنا للتحكم";
-    if (key == "left_click") return "يسار";
-    if (key == "right_click") return "يمين";
-    return key;
-  }
+  bool isMonitorMode = false; 
+  bool isConnecting = false;
+  bool _isQuickBarOpen = false;
 
-  // 💡 التعديل هنا فقط: تشغيل السوكت للأوامر، وتشغيل VLC للفيديو
-  Future<void> connectToServer(String ip) async {
-    try {
-      // 1. سوكت مخصص لإرسال أوامر الماوس والكيبورد بدون تأخير
-      socket = await Socket.connect(ip, 8080);
-      
-      // 2. مشغل VLC لاستقبال بث الشاشة (H.264)
-      _vlcViewController = VlcPlayerController.network(
-        'tcp://$ip:8080',
-        hwAcc: HwAcc.full, // تفعيل تسريع الهاردوير
-        autoPlay: true,
-        options: VlcPlayerOptions(
-          advanced: VlcAdvancedOptions([
-            VlcAdvancedOptions.networkCaching(150), // تقليل التأخير (اللاتنسي) لأقصى حد
-          ]),
-        ),
-      );
+  String currentLang = "ar";
+  String connectionStatusCode = "status_init";
+  Color statusColor = Colors.white;
 
-      setState(() {
-        isConnected = true;
-      });
-
-    } catch (e) {
-      debugPrint("خطأ في الاتصال: $e");
+  final Map<String, Map<String, String>> lang = {
+    "ar": {
+      "app_name": "ShadowHub",
+      "tab_streamdeck": "ستريم دك",
+      "tab_media": "الميديا",
+      "tab_mouse": "الماوس",
+      "tab_screen": "الشاشة",
+      "tab_settings": "الإعدادات",
+      "status_init": "اختر طريقة الاتصال للبدء 👇",
+      "status_usb_wait": "جاري انتظار الكمبيوتر عبر سلك USB ⏳...",
+      "status_usb_fail": "فشل تشغيل خادم USB. أعد المحاولة.",
+      "status_wifi_wait": "جاري تجهيز رادار الشبكة 📡...",
+      "status_wifi_fail": "تأكد من اتصال الجوال بالواي فاي (وليس البيانات)!",
+      "status_wifi_not_found": "لم يتم العثور على الكمبيوتر، تأكد من جدار الحماية.",
+      "status_connected_usb": "متصل بنجاح عبر سلك USB 🚀 ✅",
+      "status_connected_wifi": "متصل بنجاح عبر الـ Wi-Fi 📶 ✅",
+      "status_disconnected": "تم قطع الاتصال. يرجى اختيار طريقة للاتصال.",
+      "status_error": "حدث خطأ غير متوقع",
+      "btn_disconnect": "قطع الاتصال",
+      "settings_conn": "إدارة الاتصال",
+      "settings_perf": "إعدادات الأداء",
+      "settings_general": "الإعدادات العامة",
+      "mouse_speed": "سرعة الماوس:",
+      "stream_quality": "جودة بث الشاشة:",
+      "sync_apps_btn": "طلب مزامنة التطبيقات من الكمبيوتر",
+      "sync_success": "تم مزامنة التطبيقات! 🚀",
+      "no_apps": "لا توجد تطبيقات متزامنة.\nافتح الإعدادات واضغط 'مزامنة'.",
+      "mouse_hint": "إصبع واحد للتحريك\nإصبعين للتمرير (سكرول)\nلمسة واحدة للنقر\nضغطة مطولة مع السحب للتحديد",
+      "left_click": "يسار",
+      "right_click": "يمين",
+      "lang_switch": "English",
+      "stream_wait": "جاري التقاط البث...",
+      "no_conn": "لا يوجد اتصال بالكمبيوتر."
+    },
+    "en": {
+      "app_name": "ShadowHub",
+      "tab_streamdeck": "StreamDeck",
+      "tab_media": "Media",
+      "tab_mouse": "Mouse",
+      "tab_screen": "Screen",
+      "tab_settings": "Settings",
+      "status_init": "Choose connection method 👇",
+      "status_usb_wait": "Waiting for PC via USB ⏳...",
+      "status_usb_fail": "USB server failed. Try again.",
+      "status_wifi_wait": "Searching for PC on Network 📡...",
+      "status_wifi_fail": "Ensure phone is connected to Wi-Fi!",
+      "status_wifi_not_found": "PC not found, check firewall.",
+      "status_connected_usb": "Connected Successfully via USB 🚀 ✅",
+      "status_connected_wifi": "Connected Successfully via Wi-Fi 📶 ✅",
+      "status_disconnected": "Disconnected. Choose connection method.",
+      "status_error": "Unexpected Error",
+      "btn_disconnect": "Disconnect",
+      "settings_conn": "Connection Management",
+      "settings_perf": "Performance Settings",
+      "settings_general": "General Settings",
+      "mouse_speed": "Mouse Speed:",
+      "stream_quality": "Stream Quality:",
+      "sync_apps_btn": "Request Apps Sync from PC",
+      "sync_success": "Apps Synced Successfully! 🚀",
+      "no_apps": "No synced apps.\nGo to settings and tap Sync.",
+      "mouse_hint": "1 Finger: Move\n2 Fingers: Scroll\n1 Tap: Click\nLong Press & Drag: Select",
+      "left_click": "Left",
+      "right_click": "Right",
+      "lang_switch": "العربية",
+      "stream_wait": "Capturing Stream...",
+      "no_conn": "No connection to PC."
     }
+  };
+
+  String t(String key) => lang[currentLang]![key] ?? key;
+
+  String currentActiveMode = "none"; 
+  double mouseSpeed = 4.0;
+  double streamQuality = 75.0;
+
+  Socket? activeSocket;
+  ServerSocket? serverSocket;
+  bool isConnected = false;
+  bool isHandshakeDone = false;
+
+  // 💡 متغيرات مشغل الفيديو (VLC) والخادم الوهمي
+  ServerSocket? localProxy;
+  Socket? playerSocket;
+  VlcPlayerController? _vlcViewController;
+
+  Offset? _lastLongPressOffset;
+  Timer? _volumeTimer;
+  int _lastMouseSendTime = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedSettings();
   }
 
-  // دالة إرسال الأوامر (نفسها من كودك)
-  void sendCommand(String cmd) {
-    if (socket != null) {
-      socket!.write('$cmd\n');
+  Future<void> _loadSavedSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        currentLang = prefs.getString('saved_lang') ?? "ar";
+        mouseSpeed = prefs.getDouble('saved_mouse_speed') ?? 4.0;
+        streamQuality = prefs.getDouble('saved_stream_quality') ?? 75.0;
+      });
     }
   }
 
   @override
   void dispose() {
-    socket?.close();
-    _vlcViewController?.dispose();
+    _volumeTimer?.cancel();
+    _handleDisconnect();
     super.dispose();
+  }
+
+  void updateStatus(String code, Color color) {
+    if (mounted) setState(() { connectionStatusCode = code; statusColor = color; });
+  }
+
+  Future<void> startUsbMode() async {
+    manualDisconnect(); 
+    setState(() { currentActiveMode = "usb"; isConnecting = true; });
+    updateStatus("status_usb_wait", Colors.orange);
+
+    try {
+      serverSocket = await ServerSocket.bind(InternetAddress.anyIPv4, 8080);
+      serverSocket!.listen((Socket client) { setupConnection(client, "USB"); });
+    } catch (e) {
+      setState(() => isConnecting = false); updateStatus("status_usb_fail", Colors.red);
+    }
+  }
+
+  Future<void> startWifiMode() async {
+    manualDisconnect();
+    setState(() { currentActiveMode = "wifi"; isConnecting = true; });
+    updateStatus("status_wifi_wait", Colors.orange);
+
+    try {
+      String? wifiIP;
+      for (var interface in await NetworkInterface.list()) {
+        for (var addr in interface.addresses) {
+          if (addr.type == InternetAddressType.IPv4 && !addr.isLoopback) {
+            if (addr.address.startsWith('192.168.') || addr.address.startsWith('10.') || addr.address.startsWith('172.')) {
+              wifiIP = addr.address; break;
+            }
+          }
+        }
+        if (wifiIP != null) break;
+      }
+
+      if (wifiIP == null) {
+        setState(() => isConnecting = false); updateStatus("status_wifi_fail", Colors.red); return;
+      }
+
+      String subnet = wifiIP.substring(0, wifiIP.lastIndexOf('.'));
+      bool found = false;
+      int batchSize = 40; 
+      for (int i = 1; i < 255; i += batchSize) {
+        if (found || isConnected) break;
+        List<Future<void>> sweepTasks = [];
+        for (int j = i; j < i + batchSize && j < 255; j++) {
+          sweepTasks.add(
+            Socket.connect('$subnet.$j', 8080, timeout: const Duration(milliseconds: 1000)).then((socket) {
+              if (!found && !isConnected) { found = true; setupConnection(socket, "Wi-Fi"); } 
+              else { socket.destroy(); }
+            }).catchError((_) {}) 
+          );
+        }
+        await Future.wait(sweepTasks); await Future.delayed(const Duration(milliseconds: 50));
+      }
+      
+      if (!found && mounted && !isConnected) {
+        setState(() => isConnecting = false); updateStatus("status_wifi_not_found", Colors.red);
+      }
+    } catch (e) {
+      setState(() => isConnecting = false); updateStatus("status_error", Colors.red);
+    }
+  }
+
+  // 💡 التعديل هنا: دالة الاتصال أصبحت تمرر البث مباشرة للمشغل بدل معالجة الصور البطيئة
+  void setupConnection(Socket socket, String type) async {
+    activeSocket = socket;
+    activeSocket!.setOption(SocketOption.tcpNoDelay, true);
+    isHandshakeDone = false; 
+
+    localProxy = await ServerSocket.bind('127.0.0.1', 0);
+    localProxy!.listen((client) { playerSocket = client; });
+
+    activeSocket!.listen((Uint8List data) {
+      if (!isHandshakeDone) {
+        String msg = utf8.decode(data, allowMalformed: true);
+        if (msg.contains("PC_READY")) {
+          activeSocket!.write("IPAD_READY\n");
+          sendCommand("SET_QUALITY:$streamQuality");
+          sendCommand("SET_SENSITIVITY:$mouseSpeed");
+          isHandshakeDone = true;
+          if (mounted) {
+            setState(() { isConnected = true; isConnecting = false; _initVlcPlayer(localProxy!.port); });
+            updateStatus(type == "USB" ? "status_connected_usb" : "status_connected_wifi", Colors.green);
+          }
+        }
+      } else {
+        if (data.length > 10 && data[0] == 83 && data[1] == 89 && data[2] == 78 && data[3] == 67 && data[4] == 95) {
+          try {
+            String jsonStr = utf8.decode(data.sublist(10), allowMalformed: true);
+            List<dynamic> parsedApps = jsonDecode(jsonStr);
+            if (mounted) {
+              setState(() { syncedApps = List<Map<String, dynamic>>.from(parsedApps); });
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t("sync_success")), backgroundColor: Colors.green));
+            }
+          } catch (e) {}
+        } else {
+          playerSocket?.add(data); // إرسال الفيديو للمشغل مباشرة
+        }
+      }
+    }, onDone: _handleDisconnect, onError: (e) => _handleDisconnect(), cancelOnError: true);
+  }
+
+  void _initVlcPlayer(int port) {
+    _vlcViewController?.dispose();
+    _vlcViewController = VlcPlayerController.network(
+      'tcp://127.0.0.1:$port',
+      hwAcc: HwAcc.full, autoPlay: true,
+      options: VlcPlayerOptions(advanced: VlcAdvancedOptions([VlcAdvancedOptions.networkCaching(150)])),
+    );
+  }
+
+  void _handleDisconnect() {
+    activeSocket?.close(); activeSocket = null; 
+    serverSocket?.close(); serverSocket = null;
+    localProxy?.close(); localProxy = null;
+    playerSocket?.close(); playerSocket = null;
+    _vlcViewController?.dispose(); _vlcViewController = null;
+    isHandshakeDone = false;
+    if (mounted) {
+      setState(() { isConnected = false; isConnecting = false; currentActiveMode = "none"; });
+      updateStatus("status_disconnected", Colors.grey);
+    }
+  }
+
+  void manualDisconnect() { 
+    if (activeSocket != null) { sendCommand("K_SPACE"); }
+    _handleDisconnect(); 
+  }
+
+  void sendCommand(String cmd) {
+    if (activeSocket != null && isConnected) {
+      try { activeSocket!.write("$cmd\n"); } catch (e) {}
+    }
+  }
+
+  void _throttledMouseMove(double dx, double dy) {
+    int now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastMouseSendTime > 16) { 
+      sendCommand("M_MOVE:$dx:$dy"); _lastMouseSendTime = now;
+    }
+  }
+
+  void _exitLandscapeMode() {
+    setState(() { isMonitorMode = false; _currentIndex = 4; });
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  }
+
+  Widget _buildGestureArea({required Widget child}) {
+    return GestureDetector(
+      onScaleUpdate: (details) {
+        if (details.pointerCount == 1) _throttledMouseMove(details.focalPointDelta.dx, details.focalPointDelta.dy);
+        else if (details.pointerCount == 2) {
+          int now = DateTime.now().millisecondsSinceEpoch;
+          if (now - _lastMouseSendTime > 30) {
+            sendCommand("M_SCROLL:${details.focalPointDelta.dy}"); _lastMouseSendTime = now;
+          }
+        }
+      },
+      onTap: () { sendCommand("M_CLICK"); HapticFeedback.selectionClick(); },
+      onDoubleTap: () { sendCommand("M_DCLICK"); HapticFeedback.mediumImpact(); },
+      onSecondaryTap: () => sendCommand("M_R_CLICK"),
+      onLongPressStart: (details) { _lastLongPressOffset = Offset.zero; sendCommand("M_L_DOWN"); HapticFeedback.heavyImpact(); },
+      onLongPressMoveUpdate: (details) { 
+        if (_lastLongPressOffset != null) {
+          double dx = details.localOffsetFromOrigin.dx - _lastLongPressOffset!.dx;
+          double dy = details.localOffsetFromOrigin.dy - _lastLongPressOffset!.dy;
+          _lastLongPressOffset = details.localOffsetFromOrigin;
+          _throttledMouseMove(dx, dy);
+        }
+      },
+      onLongPressEnd: (details) { _lastLongPressOffset = null; sendCommand("M_L_UP"); HapticFeedback.selectionClick(); },
+      child: child,
+    );
+  }
+
+  Widget _buildStreamDeckScreen() {
+    if (syncedApps.isEmpty) { return Center(child: Text(t("no_apps"), textAlign: TextAlign.center, style: const TextStyle(color: Colors.white54, fontSize: 16))); }
+    return Stack(
+      children: [
+        GridView.builder(
+          padding: const EdgeInsets.only(top: 80, left: 20, right: 20, bottom: 20),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 5, childAspectRatio: 0.9, mainAxisSpacing: 20, crossAxisSpacing: 20),
+          itemCount: syncedApps.length,
+          itemBuilder: (context, index) {
+            final app = syncedApps[index];
+            bool hasIcon = app['icon'] != null && app['icon'].toString().isNotEmpty;
+            return Material(
+              color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(15),
+                onTap: () { sendCommand("LAUNCH:${app['path']}"); HapticFeedback.heavyImpact(); },
+                child: Container(
+                  decoration: BoxDecoration(borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.5)), boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 5)]),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      if (hasIcon) ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.memory(base64Decode(app['icon']), width: 45, height: 45, fit: BoxFit.cover, gaplessPlayback: true)) 
+                      else const Icon(Icons.apps, size: 45, color: Colors.white54),
+                      const SizedBox(height: 10), 
+                      Text(app['name'] ?? '', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+        Positioned(top: 25, left: 25, child: IconButton(icon: const Icon(Icons.close, color: Colors.white, size: 35), onPressed: _exitLandscapeMode)),
+      ],
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Column(
-        children: [
-          // 💡 تم استبدال قارئ الصور القديم بمشغل الفيديو
-          Expanded(
-            flex: 3,
-            child: isConnected && _vlcViewController != null
-                ? VlcPlayer(
-                    controller: _vlcViewController!,
-                    aspectRatio: 16 / 9,
-                    placeholder: const Center(child: CircularProgressIndicator()),
-                  )
-                : const Center(child: Text("اضغط للاتصال", style: TextStyle(color: Colors.white54))),
-          ),
-          
-          // ==========================================
-          // 👇 من هنا وتحت كودك الأصلي بالضبط بدون أي مساس 👇
-          // ==========================================
-          Expanded(
-            flex: 2,
-            child: GestureDetector(
-              onPanUpdate: (details) {
-                sendCommand('M_MOVE:${details.delta.dx}:${details.delta.dy}');
-              },
-              child: Container(
-                color: Colors.transparent, 
-                width: double.infinity, 
-                child: Center(
-                  child: Text(t("mouse_hint"), textAlign: TextAlign.center, style: const TextStyle(color: Colors.white30, fontSize: 16))
-                )
-              )
-            )
-          ),
-          Container(height: 1, color: Colors.white12), 
-          Row(
+    double keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
+    bool isKeyboardOpen = keyboardHeight > 0;
+    Widget activeScreen;
+
+    if (isMonitorMode || _currentIndex == 0) {
+      activeScreen = Scaffold(
+        resizeToAvoidBottomInset: false, backgroundColor: Colors.black,
+        body: SafeArea(
+          left: false, right: false, top: false, bottom: false,
+          child: _currentIndex == 0 ? _buildStreamDeckScreen() : Stack(
             children: [
-              Expanded(child: _mouseBtn(t("left_click"), 'M_L_DOWN', 'M_L_UP', true)),
-              Container(width: 1, height: 50, color: Colors.white12), 
-              Expanded(child: _mouseBtn(t("right_click"), 'M_R_DOWN', 'M_R_UP', false)),
-            ]
-          )
+              Center(
+                // 💡 التعديل هنا: وضعنا مشغل الفيديو مكان Image.memory القديم لعرض الشاشة!
+                child: (!isConnected || _vlcViewController == null)
+                    ? Text(t("stream_wait"), style: const TextStyle(color: Colors.white54, fontSize: 16))
+                    : _buildGestureArea(
+                        child: IgnorePointer(
+                          child: VlcPlayer(
+                            controller: _vlcViewController!,
+                            aspectRatio: MediaQuery.of(context).size.width / MediaQuery.of(context).size.height,
+                            placeholder: const Center(child: CircularProgressIndicator(color: Color(0xFFB829EA))),
+                          ),
+                        ),
+                      ),
+              ),
+              Positioned(top: 25, left: 25, child: IconButton(icon: const Icon(Icons.close, color: Colors.white, size: 35), onPressed: _exitLandscapeMode)),
+            ],
+          ),
+        ),
+      );
+    } else {
+      activeScreen = Scaffold(
+        resizeToAvoidBottomInset: false, 
+        appBar: AppBar(backgroundColor: const Color(0xFF15161E), title: Text(t("app_name"), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), centerTitle: true),
+        body: IndexedStack(index: _currentIndex, children: [const SizedBox(), _buildMediaScreen(), _buildMouseScreen(), const SizedBox(), _buildSettingsScreen()]),
+        bottomNavigationBar: BottomNavigationBar(
+          backgroundColor: const Color(0xFF15161E), selectedItemColor: const Color(0xFFB829EA), unselectedItemColor: const Color(0xFF888B94), type: BottomNavigationBarType.fixed, currentIndex: _currentIndex,
+          onTap: (index) {
+            if (index == 0 || index == 3) {
+              sendCommand("FORCE_FRAME"); setState(() => _currentIndex = index); 
+              if(index == 3) setState(() { isMonitorMode = true; });
+              SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]); SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+            } else { 
+              setState(() { _currentIndex = index; isMonitorMode = false; }); 
+              SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]); SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+            }
+          },
+          items: [
+            BottomNavigationBarItem(icon: const Icon(Icons.apps), label: t("tab_streamdeck")), 
+            BottomNavigationBarItem(icon: const Icon(Icons.music_note), label: t("tab_media")), 
+            BottomNavigationBarItem(icon: const Icon(Icons.mouse), label: t("tab_mouse")), 
+            BottomNavigationBarItem(icon: const Icon(Icons.monitor), label: t("tab_screen")), 
+            BottomNavigationBarItem(icon: const Icon(Icons.settings), label: t("tab_settings"))
+          ],
+        ),
+      );
+    }
+
+    return Directionality(
+      textDirection: currentLang == 'ar' ? TextDirection.rtl : TextDirection.ltr,
+      child: Material(
+        type: MaterialType.transparency,
+        child: Stack(
+          children: [
+            GestureDetector(
+              onTap: () { if (isKeyboardOpen || _keyboardFocus.hasFocus) { FocusManager.instance.primaryFocus?.unfocus(); SystemChannels.textInput.invokeMethod('TextInput.hide'); } },
+              behavior: HitTestBehavior.translucent, child: activeScreen,
+            ),
+            Positioned(
+              top: 0, left: 0,
+              child: Opacity(
+                opacity: 0.0,
+                child: SizedBox(
+                  width: 1, height: 1,
+                  child: TextField(
+                    controller: _keyboardController, focusNode: _keyboardFocus, autocorrect: false, enableSuggestions: false, keyboardType: TextInputType.multiline, maxLines: null,
+                    onChanged: (text) {
+                      if (text.isNotEmpty && text.length > _lastText.length) {
+                        String newChars = text.substring(_lastText.length);
+                        for (int i = 0; i < newChars.length; i++) {
+                          String char = newChars[i];
+                          if (char == " ") sendCommand("K_SPACE"); else if (char == "\n") sendCommand("K_ENTER"); else sendCommand("K_TYPE:$char");
+                        }
+                      } else if (text.length < _lastText.length) { for (int i = 0; i < (_lastText.length - text.length); i++) sendCommand("K_BACK"); }
+                      _lastText = text;
+                    },
+                  ),
+                ),
+              ),
+            ),
+            if ((isMonitorMode || _currentIndex == 0 || _currentIndex == 1 || _currentIndex == 2) && _currentIndex != 4)
+              Positioned(
+                top: isMonitorMode || _currentIndex == 0 ? 25 : 60, right: 25, 
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    if (_isQuickBarOpen)
+                      Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 10), padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 0),
+                        decoration: BoxDecoration(color: const Color(0xFF15161E).withOpacity(0.8), borderRadius: BorderRadius.circular(25), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.5), width: 1.5), boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10)]),
+                        child: Row(
+                          children: [
+                            IconButton(icon: const Icon(Icons.monitor, color: Colors.white70, size: 22), onPressed: () { sendCommand("FORCE_FRAME"); sendCommand("TOGGLE_SCREEN"); HapticFeedback.heavyImpact(); }),
+                            IconButton(icon: const Icon(Icons.keyboard, color: Colors.white70, size: 22), onPressed: () { if (isKeyboardOpen || _keyboardFocus.hasFocus) { FocusManager.instance.primaryFocus?.unfocus(); SystemChannels.textInput.invokeMethod('TextInput.hide'); } else { _keyboardFocus.requestFocus(); SystemChannels.textInput.invokeMethod('TextInput.show'); } HapticFeedback.lightImpact(); }),
+                            _quickBtn(Icons.copy, 'HOTKEY:ctrl+c'), _quickBtn(Icons.paste, 'HOTKEY:ctrl+v'), _quickBtn(Icons.cut, 'HOTKEY:ctrl+x'), _quickBtn(Icons.undo, 'HOTKEY:ctrl+z'),
+                          ],
+                        ),
+                      ),
+                    FloatingActionButton(
+                      mini: true, elevation: 0,
+                      backgroundColor: _isQuickBarOpen ? const Color(0xFF222533).withOpacity(0.7) : const Color(0xFFB829EA).withOpacity(0.6),
+                      onPressed: () => setState(() => _isQuickBarOpen = !_isQuickBarOpen), child: Icon(_isQuickBarOpen ? Icons.close : Icons.bolt, color: Colors.white),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _quickBtn(IconData icon, String cmd) {
+    return IconButton(icon: Icon(icon, color: Colors.white70, size: 22), onPressed: () { sendCommand(cmd); HapticFeedback.lightImpact(); });
+  }
+
+  Widget _buildSettingsScreen() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.3))),
+            child: Column(
+              children: [
+                Text(t("settings_general"), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)), const SizedBox(height: 15),
+                ElevatedButton.icon(
+                  onPressed: () async { setState(() { currentLang = currentLang == 'ar' ? 'en' : 'ar'; }); final prefs = await SharedPreferences.getInstance(); prefs.setString('saved_lang', currentLang); }, 
+                  icon: const Icon(Icons.language, color: Colors.white), label: Text(t("lang_switch"), style: const TextStyle(fontSize: 16)),
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF222533), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20)),
+                ),
+                if (isConnected) ...[
+                  const SizedBox(height: 15),
+                  ElevatedButton.icon(
+                    onPressed: () { sendCommand("REQUEST_SYNC"); }, icon: const Icon(Icons.sync, color: Colors.white), label: Text(t("sync_apps_btn"), style: const TextStyle(fontSize: 14)),
+                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFB829EA).withOpacity(0.7), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20)),
+                  ),
+                ]
+              ],
+            ),
+          ),
+          const SizedBox(height: 25),
+          Container(
+            padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.3))),
+            child: Column(
+              children: [
+                Text(t("settings_conn"), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)), const SizedBox(height: 15),
+                Text(t(connectionStatusCode), textAlign: TextAlign.center, style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 14)), const SizedBox(height: 20),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: (isConnected && currentActiveMode == "wifi") ? null : startWifiMode,
+                        icon: const Icon(Icons.wifi, color: Colors.white), label: const Text('Wi-Fi', style: TextStyle(fontSize: 16)),
+                        style: ElevatedButton.styleFrom(backgroundColor: currentActiveMode == "wifi" ? Colors.green : const Color(0xFF222533), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                      ),
+                    ),
+                    const SizedBox(width: 15),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: (isConnected && currentActiveMode == "usb") ? null : startUsbMode,
+                        icon: const Icon(Icons.usb, color: Colors.white), label: const Text('USB', style: TextStyle(fontSize: 16)),
+                        style: ElevatedButton.styleFrom(backgroundColor: currentActiveMode == "usb" ? const Color(0xFFB829EA) : const Color(0xFF222533), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                      ),
+                    ),
+                  ],
+                ),
+                if (isConnected) ...[
+                  const SizedBox(height: 20),
+                  ElevatedButton.icon(
+                    onPressed: manualDisconnect, icon: const Icon(Icons.power_settings_new, color: Colors.white), label: Text(t("btn_disconnect"), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 10)),
+                  ),
+                ]
+              ],
+            ),
+          ),
+          const SizedBox(height: 25),
+          Container(
+            padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFB829EA).withOpacity(0.3))),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(child: Text(t("settings_perf"), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white))), const SizedBox(height: 20),
+                Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(t("mouse_speed"), style: const TextStyle(color: Colors.white70, fontSize: 16)), Text(mouseSpeed.toStringAsFixed(1), style: const TextStyle(color: Color(0xFFB829EA), fontWeight: FontWeight.bold, fontSize: 16)),]),
+                Slider(
+                  value: mouseSpeed, min: 1.0, max: 10.0, divisions: 18, activeColor: const Color(0xFFB829EA), 
+                  onChanged: (value) { setState(() { mouseSpeed = value; }); }, 
+                  onChangeEnd: (value) async { sendCommand("SET_SENSITIVITY:$value"); final prefs = await SharedPreferences.getInstance(); prefs.setDouble('saved_mouse_speed', value); }
+                ),
+                const SizedBox(height: 15),
+                Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(t("stream_quality"), style: const TextStyle(color: Colors.white70, fontSize: 16)), Text("${streamQuality.toInt()}%", style: const TextStyle(color: Color(0xFFB829EA), fontWeight: FontWeight.bold, fontSize: 16)),]),
+                Slider(
+                  value: streamQuality, min: 50.0, max: 100.0, divisions: 10, activeColor: const Color(0xFFB829EA), 
+                  onChanged: (value) { setState(() { streamQuality = value; }); }, 
+                  onChangeEnd: (value) async { sendCommand("SET_QUALITY:$value"); final prefs = await SharedPreferences.getInstance(); prefs.setDouble('saved_stream_quality', value); }
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
 
-  // أزرار الماوس الخاصة بك
-  Widget _mouseBtn(String t, String down, String up, bool isLeft) { 
+  Widget _buildMediaScreen() {
+    return GridView.count(
+      crossAxisCount: 3, childAspectRatio: 1.2, padding: const EdgeInsets.all(15), mainAxisSpacing: 15, crossAxisSpacing: 15, 
+      children: [
+        _buildMediaBtn(Icons.volume_off, 'VOL_MUTE'), _buildMediaBtn(Icons.play_arrow, 'MEDIA_PLAY_PAUSE'), _buildContinuousMediaBtn(Icons.volume_up, 'VOL_UP'), 
+        _buildMediaBtn(Icons.skip_previous, 'MEDIA_PREV'), _buildMediaBtn(Icons.skip_next, 'MEDIA_NEXT'), _buildContinuousMediaBtn(Icons.volume_down, 'VOL_DOWN')
+      ]
+    );
+  }
+
+  Widget _buildMediaBtn(IconData i, String c) { 
     return Material(
-      color: Colors.transparent, 
-      borderRadius: BorderRadius.only(bottomLeft: Radius.circular(isLeft ? 15 : 0), bottomRight: Radius.circular(isLeft ? 0 : 15)),
+      color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15),
       child: InkWell(
-        borderRadius: BorderRadius.only(bottomLeft: Radius.circular(isLeft ? 15 : 0), bottomRight: Radius.circular(isLeft ? 0 : 15)),
-        onTapDown: (_) { sendCommand(down); HapticFeedback.selectionClick(); }, 
-        onTapUp: (_) => sendCommand(up),
-        child: Container(
-          height: 50,
-          alignment: Alignment.center,
-          child: Text(t, style: const TextStyle(color: Colors.white, fontSize: 16)),
+        borderRadius: BorderRadius.circular(15),
+        onTap: () { sendCommand(c); HapticFeedback.lightImpact(); }, 
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(i, size: 35, color: const Color(0xFFB829EA))])
+      )
+    ); 
+  }
+  
+  Widget _buildContinuousMediaBtn(IconData i, String c) { 
+    return Material(
+      color: const Color(0xFF15161E), borderRadius: BorderRadius.circular(15),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(15),
+        onTapDown: (_) { sendCommand(c); HapticFeedback.lightImpact(); _volumeTimer = Timer.periodic(const Duration(milliseconds: 150), (timer) { sendCommand(c); }); }, 
+        onTapUp: (_) => _volumeTimer?.cancel(), onTapCancel: () => _volumeTimer?.cancel(), 
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(i, size: 35, color: const Color(0xFFB829EA))])
+      )
+    ); 
+  }
+
+  Widget _buildMouseScreen() {
+    return Padding(
+      padding: const EdgeInsets.all(20.0),
+      child: Container(
+        decoration: BoxDecoration(color: const Color(0xFF1E1F29), borderRadius: BorderRadius.circular(15), boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 5))]),
+        child: Column(
+          children: [
+            Expanded(
+              child: _buildGestureArea(
+                child: Container(color: Colors.transparent, width: double.infinity, child: Center(child: Text(t("mouse_hint"), textAlign: TextAlign.center, style: const TextStyle(color: Colors.white30, fontSize: 16))))
+              )
+            ),
+            Container(height: 1, color: Colors.white12), 
+            Row(
+              children: [
+                Expanded(child: _mouseBtn(t("left_click"), 'M_L_DOWN', 'M_L_UP', true)),
+                Container(width: 1, height: 50, color: Colors.white12), 
+                Expanded(child: _mouseBtn(t("right_click"), 'M_R_DOWN', 'M_R_UP', false)),
+              ]
+            )
+          ],
         ),
       ),
     );
+  }
+  
+  Widget _mouseBtn(String t, String down, String up, bool isLeft) { 
+    return Material(
+      color: Colors.transparent, borderRadius: BorderRadius.only(bottomLeft: Radius.circular(isLeft ? 15 : 0), bottomRight: Radius.circular(isLeft ? 0 : 15)),
+      child: InkWell(
+        borderRadius: BorderRadius.only(bottomLeft: Radius.circular(isLeft ? 15 : 0), bottomRight: Radius.circular(isLeft ? 0 : 15)),
+        onTapDown: (_) { sendCommand(down); HapticFeedback.selectionClick(); }, 
+        onTapUp: (_) => sendCommand(up), onTapCancel: () => sendCommand(up),
+        child: Container(padding: const EdgeInsets.symmetric(vertical: 15), child: Center(child: Text(t, style: const TextStyle(fontSize: 14, color: Colors.white70, fontWeight: FontWeight.bold))))
+      )
+    ); 
   }
 }
