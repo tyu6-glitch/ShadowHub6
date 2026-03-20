@@ -6,7 +6,7 @@ import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:network_info_plus/network_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter_vlc_player/flutter_vlc_player.dart'; // 💡 تم إضافة مشغل الفيديو
+import 'package:flutter_vlc_player/flutter_vlc_player.dart'; 
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -134,10 +134,12 @@ class _MainScreenState extends State<MainScreen> {
   bool isConnected = false;
   bool isHandshakeDone = false;
 
-  // 💡 متغيرات مشغل الفيديو (VLC) والخادم الوهمي
   ServerSocket? localProxy;
   Socket? playerSocket;
   VlcPlayerController? _vlcViewController;
+  
+  // 💡 هذه هي السلة التي ستحفظ الترويسة (السر هنا!)
+  List<Uint8List> _videoBuffer = []; 
 
   Offset? _lastLongPressOffset;
   Timer? _volumeTimer;
@@ -231,14 +233,23 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
-  // 💡 التعديل هنا: دالة الاتصال أصبحت تمرر البث مباشرة للمشغل بدل معالجة الصور البطيئة
   void setupConnection(Socket socket, String type) async {
     activeSocket = socket;
     activeSocket!.setOption(SocketOption.tcpNoDelay, true);
     isHandshakeDone = false; 
+    _videoBuffer.clear(); // تنظيف السلة للاتصال الجديد
 
     localProxy = await ServerSocket.bind('127.0.0.1', 0);
-    localProxy!.listen((client) { playerSocket = client; });
+    localProxy!.listen((client) { 
+      playerSocket = client; 
+      // 💡 بمجرد أن يتصل VLC، نصب له الترويسة المخزنة فوراً
+      if (_videoBuffer.isNotEmpty) {
+        for (var dataChunk in _videoBuffer) {
+          playerSocket?.add(dataChunk);
+        }
+        _videoBuffer.clear(); // تفريغ السلة
+      }
+    });
 
     activeSocket!.listen((Uint8List data) {
       if (!isHandshakeDone) {
@@ -264,7 +275,12 @@ class _MainScreenState extends State<MainScreen> {
             }
           } catch (e) {}
         } else {
-          playerSocket?.add(data); // إرسال الفيديو للمشغل مباشرة
+          // 💡 هنا يتم حفظ البيانات أو إرسالها
+          if (playerSocket != null) {
+            playerSocket!.add(data); // إرسال مباشر إذا كان المشغل جاهز
+          } else {
+            _videoBuffer.add(data); // تخزين في السلة إذا كان المشغل يفتح
+          }
         }
       }
     }, onDone: _handleDisconnect, onError: (e) => _handleDisconnect(), cancelOnError: true);
@@ -274,8 +290,13 @@ class _MainScreenState extends State<MainScreen> {
     _vlcViewController?.dispose();
     _vlcViewController = VlcPlayerController.network(
       'tcp://127.0.0.1:$port',
-      hwAcc: HwAcc.full, autoPlay: true,
-      options: VlcPlayerOptions(advanced: VlcAdvancedOptions([VlcAdvancedOptions.networkCaching(150)])),
+      hwAcc: HwAcc.full, 
+      autoPlay: true,
+      options: VlcPlayerOptions(
+        advanced: VlcAdvancedOptions([
+          VlcAdvancedOptions.networkCaching(50), // 💡 تقليل التأخير لأقصى درجة ممكنة لـ Zero Latency
+        ]),
+      ),
     );
   }
 
@@ -285,6 +306,7 @@ class _MainScreenState extends State<MainScreen> {
     localProxy?.close(); localProxy = null;
     playerSocket?.close(); playerSocket = null;
     _vlcViewController?.dispose(); _vlcViewController = null;
+    _videoBuffer.clear();
     isHandshakeDone = false;
     if (mounted) {
       setState(() { isConnected = false; isConnecting = false; currentActiveMode = "none"; });
@@ -395,7 +417,6 @@ class _MainScreenState extends State<MainScreen> {
           child: _currentIndex == 0 ? _buildStreamDeckScreen() : Stack(
             children: [
               Center(
-                // 💡 التعديل هنا: وضعنا مشغل الفيديو مكان Image.memory القديم لعرض الشاشة!
                 child: (!isConnected || _vlcViewController == null)
                     ? Text(t("stream_wait"), style: const TextStyle(color: Colors.white54, fontSize: 16))
                     : _buildGestureArea(
