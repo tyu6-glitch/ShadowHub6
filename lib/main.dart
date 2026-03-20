@@ -6,10 +6,16 @@ import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:network_info_plus/network_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter_vlc_player/flutter_vlc_player.dart'; 
+
+// 💡 استدعاء مكتبة media_kit الجديدة
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  // 💡 تهيئة محرك الفيديو الجبار قبل تشغيل التطبيق
+  MediaKit.ensureInitialized();
+  
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]).then((_) {
     runApp(const ShadowHubApp());
   });
@@ -134,11 +140,15 @@ class _MainScreenState extends State<MainScreen> {
   bool isConnected = false;
   bool isHandshakeDone = false;
 
-  HttpServer? localHttpProxy;
-  HttpResponse? currentHttpResponse;
-  VlcPlayerController? _vlcViewController;
+  ServerSocket? localProxy;
+  Socket? playerSocket;
+  
+  // 💡 متغيرات المشغل الجديد media_kit
+  Player? _player;
+  VideoController? _videoController;
   
   List<Uint8List> _videoBuffer = []; 
+  List<Uint8List> _headerCache = []; 
 
   Offset? _lastLongPressOffset;
   Timer? _volumeTimer;
@@ -237,23 +247,19 @@ class _MainScreenState extends State<MainScreen> {
     activeSocket!.setOption(SocketOption.tcpNoDelay, true);
     isHandshakeDone = false; 
     _videoBuffer.clear(); 
+    _headerCache.clear();
 
-    // 💡 التعديل هنا: إعدادات اتصال لا تنغلق (Keep-Alive) لمنع الشاشة السوداء
-    localHttpProxy = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    localHttpProxy!.listen((HttpRequest request) { 
-      request.response.statusCode = HttpStatus.ok;
-      request.response.headers.set('Content-Type', 'video/mp2t'); 
-      request.response.headers.set('Connection', 'keep-alive'); // 🔴 مهم جداً
-      request.response.headers.set('Cache-Control', 'no-cache, no-store, must-revalidate'); // 🔴 منع الكاش الوهمي
-      request.response.headers.add('Access-Control-Allow-Origin', '*');
-      currentHttpResponse = request.response;
+    localProxy = await ServerSocket.bind('127.0.0.1', 0);
+    localProxy!.listen((client) { 
+      playerSocket = client; 
       
-      if (_videoBuffer.isNotEmpty) {
-        for (var dataChunk in _videoBuffer) {
-          try { currentHttpResponse!.add(dataChunk); } catch (_) {}
-        }
-        _videoBuffer.clear();
+      for (var chunk in _headerCache) {
+        try { playerSocket!.add(chunk); } catch (_) {}
       }
+      for (var chunk in _videoBuffer) {
+        try { playerSocket!.add(chunk); } catch (_) {}
+      }
+      _videoBuffer.clear();
     });
 
     activeSocket!.listen((Uint8List data) {
@@ -272,18 +278,15 @@ class _MainScreenState extends State<MainScreen> {
               setState(() { 
                 isConnected = true; 
                 isConnecting = false; 
-                _initVlcPlayer(localHttpProxy!.port); 
+                _initPlayer(localProxy!.port); 
               });
               updateStatus(type == "USB" ? "status_connected_usb" : "status_connected_wifi", Colors.green);
             }
 
             if (newlineIndex + 1 < data.length) {
               Uint8List videoData = data.sublist(newlineIndex + 1);
-              if (currentHttpResponse != null) {
-                try { currentHttpResponse!.add(videoData); } catch (_) { currentHttpResponse = null; }
-              } else {
-                _videoBuffer.add(videoData);
-              }
+              _headerCache.add(videoData); 
+              _videoBuffer.add(videoData);
             }
           }
         }
@@ -298,15 +301,20 @@ class _MainScreenState extends State<MainScreen> {
             }
           } catch (e) {}
         } else {
-          if (currentHttpResponse != null) {
+          
+          if (_headerCache.length < 15) {
+            _headerCache.add(data);
+          }
+
+          if (playerSocket != null) {
             try {
-              currentHttpResponse!.add(data);
+              playerSocket!.add(data);
             } catch (e) {
-              currentHttpResponse = null;
+              playerSocket = null;
             }
           } else {
              _videoBuffer.add(data);
-             if (_videoBuffer.length > 150) {
+             if (_videoBuffer.length > 100) {
                _videoBuffer.removeAt(0);
              }
           }
@@ -315,27 +323,33 @@ class _MainScreenState extends State<MainScreen> {
     }, onDone: _handleDisconnect, onError: (e) => _handleDisconnect(), cancelOnError: true);
   }
 
-  void _initVlcPlayer(int port) {
-    _vlcViewController?.dispose();
-    _vlcViewController = VlcPlayerController.network(
-      'http://127.0.0.1:$port/live.ts', 
-      hwAcc: HwAcc.disabled, // 🔴 تعطيل كامل لتسريع العتاد لإجبار الجوال على قراءة الفيديو وتجنب الشاشة السوداء
-      autoPlay: true,
-      options: VlcPlayerOptions(
-        advanced: VlcAdvancedOptions([
-          VlcAdvancedOptions.networkCaching(1000), // 🔴 زيادة الذاكرة المؤقتة إلى ثانية كاملة
-        ]),
-      ),
-    );
+  // 💡 دالة تشغيل media_kit الذكية
+  void _initPlayer(int port) {
+    _player?.dispose();
+    
+    // إعداد المشغل ليكون منخفض التأخير (Low Latency)
+    _player = Player(configuration: const PlayerConfiguration(
+      bufferSize: 1024 * 1024 * 4, // ذاكرة صغيرة لضمان السرعة
+    ));
+    
+    _videoController = VideoController(_player!);
+    
+    // قراءة البث المباشر من السيرفر المحلي
+    _player!.open(Media('tcp://127.0.0.1:$port'), play: true);
   }
 
   void _handleDisconnect() {
     activeSocket?.close(); activeSocket = null; 
     serverSocket?.close(); serverSocket = null;
-    currentHttpResponse?.close(); currentHttpResponse = null;
-    localHttpProxy?.close(); localHttpProxy = null;
-    _vlcViewController?.dispose(); _vlcViewController = null;
+    localProxy?.close(); localProxy = null;
+    playerSocket?.close(); playerSocket = null;
+    
+    // إغلاق المشغل الجديد
+    _player?.dispose(); _player = null;
+    _videoController = null;
+    
     _videoBuffer.clear();
+    _headerCache.clear();
     isHandshakeDone = false;
     if (mounted) {
       setState(() { isConnected = false; isConnecting = false; currentActiveMode = "none"; });
@@ -446,14 +460,15 @@ class _MainScreenState extends State<MainScreen> {
           child: _currentIndex == 0 ? _buildStreamDeckScreen() : Stack(
             children: [
               Center(
-                child: (!isConnected || _vlcViewController == null)
+                child: (!isConnected || _videoController == null)
                     ? Text(t("stream_wait"), style: const TextStyle(color: Colors.white54, fontSize: 16))
                     : _buildGestureArea(
                         child: IgnorePointer(
-                          child: VlcPlayer(
-                            controller: _vlcViewController!,
-                            aspectRatio: MediaQuery.of(context).size.width / MediaQuery.of(context).size.height,
-                            placeholder: const Center(child: CircularProgressIndicator(color: Color(0xFFB829EA))),
+                          // 💡 استخدام واجهة Video الخاصة بمكتبة media_kit
+                          child: Video(
+                            controller: _videoController!,
+                            fit: BoxFit.contain,
+                            controls: NoVideoControls, // إخفاء أزرار التشغيل
                           ),
                         ),
                       ),
