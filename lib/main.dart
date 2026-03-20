@@ -7,13 +7,11 @@ import 'package:flutter/services.dart';
 import 'package:network_info_plus/network_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-// 💡 استدعاء مكتبة media_kit الجديدة
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  // 💡 تهيئة محرك الفيديو الجبار قبل تشغيل التطبيق
   MediaKit.ensureInitialized();
   
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]).then((_) {
@@ -140,10 +138,10 @@ class _MainScreenState extends State<MainScreen> {
   bool isConnected = false;
   bool isHandshakeDone = false;
 
-  ServerSocket? localProxy;
-  Socket? playerSocket;
+  // 💡 حولنا السيرفر لـ HTTP بدل TCP ليتعرف عليه المشغل فوراً
+  HttpServer? localProxy;
+  IOSink? playerSink;
   
-  // 💡 متغيرات المشغل الجديد media_kit
   Player? _player;
   VideoController? _videoController;
   
@@ -249,15 +247,20 @@ class _MainScreenState extends State<MainScreen> {
     _videoBuffer.clear(); 
     _headerCache.clear();
 
-    localProxy = await ServerSocket.bind('127.0.0.1', 0);
-    localProxy!.listen((client) { 
-      playerSocket = client; 
+    // 💡 إعداد خادم HTTP ذكي يحقن البيانات بشكل متواصل
+    localProxy = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    localProxy!.listen((HttpRequest request) { 
+      request.response.statusCode = HttpStatus.ok;
+      request.response.headers.set('Content-Type', 'video/mp2t');
+      request.response.headers.set('Connection', 'keep-alive');
+      request.response.headers.add('Access-Control-Allow-Origin', '*');
+      playerSink = request.response; 
       
       for (var chunk in _headerCache) {
-        try { playerSocket!.add(chunk); } catch (_) {}
+        try { playerSink!.add(chunk); } catch (_) {}
       }
       for (var chunk in _videoBuffer) {
-        try { playerSocket!.add(chunk); } catch (_) {}
+        try { playerSink!.add(chunk); } catch (_) {}
       }
       _videoBuffer.clear();
     });
@@ -306,11 +309,11 @@ class _MainScreenState extends State<MainScreen> {
             _headerCache.add(data);
           }
 
-          if (playerSocket != null) {
+          if (playerSink != null) {
             try {
-              playerSocket!.add(data);
+              playerSink!.add(data);
             } catch (e) {
-              playerSocket = null;
+              playerSink = null;
             }
           } else {
              _videoBuffer.add(data);
@@ -323,28 +326,30 @@ class _MainScreenState extends State<MainScreen> {
     }, onDone: _handleDisconnect, onError: (e) => _handleDisconnect(), cancelOnError: true);
   }
 
-  // 💡 دالة تشغيل media_kit الذكية
   void _initPlayer(int port) {
     _player?.dispose();
     
-    // إعداد المشغل ليكون منخفض التأخير (Low Latency)
     _player = Player(configuration: const PlayerConfiguration(
-      bufferSize: 1024 * 1024 * 4, // ذاكرة صغيرة لضمان السرعة
+      bufferSize: 1024 * 1024 * 2, 
     ));
     
     _videoController = VideoController(_player!);
+
+    // 🚀 أسرار Spacedesk لتقليل التأخير للصفر (Zero-Latency)
+    _player!.setProperty('profile', 'low-latency');
+    _player!.setProperty('cache', 'no');
+    _player!.setProperty('untimed', 'yes');
     
-    // قراءة البث المباشر من السيرفر المحلي
-    _player!.open(Media('tcp://127.0.0.1:$port'), play: true);
+    // 💡 استخدام رابط وهمي ينتهي بـ .ts لكي يفهم المشغل الصيغة فوراً بدون تفكير
+    _player!.open(Media('http://127.0.0.1:$port/live.ts'), play: true);
   }
 
   void _handleDisconnect() {
     activeSocket?.close(); activeSocket = null; 
     serverSocket?.close(); serverSocket = null;
     localProxy?.close(); localProxy = null;
-    playerSocket?.close(); playerSocket = null;
+    playerSink = null;
     
-    // إغلاق المشغل الجديد
     _player?.dispose(); _player = null;
     _videoController = null;
     
@@ -464,11 +469,10 @@ class _MainScreenState extends State<MainScreen> {
                     ? Text(t("stream_wait"), style: const TextStyle(color: Colors.white54, fontSize: 16))
                     : _buildGestureArea(
                         child: IgnorePointer(
-                          // 💡 استخدام واجهة Video الخاصة بمكتبة media_kit
                           child: Video(
                             controller: _videoController!,
                             fit: BoxFit.contain,
-                            controls: NoVideoControls, // إخفاء أزرار التشغيل
+                            controls: NoVideoControls, 
                           ),
                         ),
                       ),
