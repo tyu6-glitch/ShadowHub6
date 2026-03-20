@@ -134,11 +134,10 @@ class _MainScreenState extends State<MainScreen> {
   bool isConnected = false;
   bool isHandshakeDone = false;
 
-  ServerSocket? localProxy;
-  Socket? playerSocket;
+  HttpServer? localHttpProxy;
+  HttpResponse? currentHttpResponse;
   VlcPlayerController? _vlcViewController;
   
-  // 💡 هذه هي السلة التي ستحفظ الترويسة (السر هنا!)
   List<Uint8List> _videoBuffer = []; 
 
   Offset? _lastLongPressOffset;
@@ -237,17 +236,20 @@ class _MainScreenState extends State<MainScreen> {
     activeSocket = socket;
     activeSocket!.setOption(SocketOption.tcpNoDelay, true);
     isHandshakeDone = false; 
-    _videoBuffer.clear(); // تنظيف السلة للاتصال الجديد
+    _videoBuffer.clear(); 
 
-    localProxy = await ServerSocket.bind('127.0.0.1', 0);
-    localProxy!.listen((client) { 
-      playerSocket = client; 
-      // 💡 بمجرد أن يتصل VLC، نصب له الترويسة المخزنة فوراً
+    // 💡 الخادم المطور: لن يفقد أي ترويسة أبداً
+    localHttpProxy = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    localHttpProxy!.listen((HttpRequest request) { 
+      request.response.headers.contentType = ContentType('video', 'mp2t'); 
+      request.response.headers.add('Access-Control-Allow-Origin', '*');
+      currentHttpResponse = request.response;
+      
+      // بمجرد أن يتصل VLC، نطعمه الترويسة الأساسية المحفوظة
       if (_videoBuffer.isNotEmpty) {
         for (var dataChunk in _videoBuffer) {
-          playerSocket?.add(dataChunk);
+          currentHttpResponse!.add(dataChunk);
         }
-        _videoBuffer.clear(); // تفريغ السلة
       }
     });
 
@@ -255,12 +257,28 @@ class _MainScreenState extends State<MainScreen> {
       if (!isHandshakeDone) {
         String msg = utf8.decode(data, allowMalformed: true);
         if (msg.contains("PC_READY")) {
+          // محاولة التقاط الترويسة المدمجة مع رسالة الاتصال
+          int splitIndex = -1;
+          for (int i = 0; i < data.length; i++) {
+            if (data[i] == 10) { 
+              splitIndex = i; break;
+            }
+          }
+          if (splitIndex != -1 && splitIndex + 1 < data.length) {
+            Uint8List videoData = data.sublist(splitIndex + 1);
+            if (_videoBuffer.length < 100) _videoBuffer.add(videoData);
+          }
+
           activeSocket!.write("IPAD_READY\n");
           sendCommand("SET_QUALITY:$streamQuality");
           sendCommand("SET_SENSITIVITY:$mouseSpeed");
           isHandshakeDone = true;
           if (mounted) {
-            setState(() { isConnected = true; isConnecting = false; _initVlcPlayer(localProxy!.port); });
+            setState(() { 
+              isConnected = true; 
+              isConnecting = false; 
+              _initVlcPlayer(localHttpProxy!.port); 
+            });
             updateStatus(type == "USB" ? "status_connected_usb" : "status_connected_wifi", Colors.green);
           }
         }
@@ -275,11 +293,17 @@ class _MainScreenState extends State<MainScreen> {
             }
           } catch (e) {}
         } else {
-          // 💡 هنا يتم حفظ البيانات أو إرسالها
-          if (playerSocket != null) {
-            playerSocket!.add(data); // إرسال مباشر إذا كان المشغل جاهز
-          } else {
-            _videoBuffer.add(data); // تخزين في السلة إذا كان المشغل يفتح
+          // توجيه الفيديو للمشغل مباشرة
+          if (currentHttpResponse != null) {
+            try {
+              currentHttpResponse!.add(data);
+            } catch (e) {
+              currentHttpResponse = null;
+            }
+          } 
+          // 💡 هذا السطر هو منقذ الشاشة السوداء: حفظ أول 100 حزمة فقط وعدم مسحها!
+          if (_videoBuffer.length < 100) {
+            _videoBuffer.add(data);
           }
         }
       }
@@ -289,13 +313,17 @@ class _MainScreenState extends State<MainScreen> {
   void _initVlcPlayer(int port) {
     _vlcViewController?.dispose();
     _vlcViewController = VlcPlayerController.network(
-      'tcp://127.0.0.1:$port',
+      'http://127.0.0.1:$port', 
       hwAcc: HwAcc.full, 
       autoPlay: true,
       options: VlcPlayerOptions(
         advanced: VlcAdvancedOptions([
-          VlcAdvancedOptions.networkCaching(50), // 💡 تقليل التأخير لأقصى درجة ممكنة لـ Zero Latency
+          VlcAdvancedOptions.networkCaching(150), 
         ]),
+        extras: [
+          '--demux=ts', // 💡 إجبار المشغل على فهم صيغة الفيديو فوراً دون تردد
+          '--clock-jitter=0',
+        ],
       ),
     );
   }
@@ -303,8 +331,8 @@ class _MainScreenState extends State<MainScreen> {
   void _handleDisconnect() {
     activeSocket?.close(); activeSocket = null; 
     serverSocket?.close(); serverSocket = null;
-    localProxy?.close(); localProxy = null;
-    playerSocket?.close(); playerSocket = null;
+    currentHttpResponse?.close(); currentHttpResponse = null;
+    localHttpProxy?.close(); localHttpProxy = null;
     _vlcViewController?.dispose(); _vlcViewController = null;
     _videoBuffer.clear();
     isHandshakeDone = false;
