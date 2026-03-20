@@ -238,12 +238,13 @@ class _MainScreenState extends State<MainScreen> {
     isHandshakeDone = false; 
     _videoBuffer.clear(); 
 
-    // 💡 إعداد الخادم المحلي بطريقة نظيفة بدون Chunking ليتوافق مع VLC
+    // 💡 التعديل هنا: إعدادات اتصال لا تنغلق (Keep-Alive) لمنع الشاشة السوداء
     localHttpProxy = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     localHttpProxy!.listen((HttpRequest request) { 
       request.response.statusCode = HttpStatus.ok;
       request.response.headers.set('Content-Type', 'video/mp2t'); 
-      request.response.headers.set('Connection', 'close');
+      request.response.headers.set('Connection', 'keep-alive'); // 🔴 مهم جداً
+      request.response.headers.set('Cache-Control', 'no-cache, no-store, must-revalidate'); // 🔴 منع الكاش الوهمي
       request.response.headers.add('Access-Control-Allow-Origin', '*');
       currentHttpResponse = request.response;
       
@@ -297,7 +298,6 @@ class _MainScreenState extends State<MainScreen> {
             }
           } catch (e) {}
         } else {
-          // ضخ الفيديو بحذر
           if (currentHttpResponse != null) {
             try {
               currentHttpResponse!.add(data);
@@ -306,7 +306,6 @@ class _MainScreenState extends State<MainScreen> {
             }
           } else {
              _videoBuffer.add(data);
-             // 💡 حد أقصى للذاكرة المؤقتة لمنع الشاشة السوداء وتجميد VLC عند تأخر الاتصال
              if (_videoBuffer.length > 150) {
                _videoBuffer.removeAt(0);
              }
@@ -318,14 +317,13 @@ class _MainScreenState extends State<MainScreen> {
 
   void _initVlcPlayer(int port) {
     _vlcViewController?.dispose();
-    // 💡 إضافة .ts في الرابط، وتغيير hwAcc إلى auto لحل مشكلة الشاشة السوداء!
     _vlcViewController = VlcPlayerController.network(
       'http://127.0.0.1:$port/live.ts', 
-      hwAcc: HwAcc.auto, 
+      hwAcc: HwAcc.disabled, // 🔴 تعطيل كامل لتسريع العتاد لإجبار الجوال على قراءة الفيديو وتجنب الشاشة السوداء
       autoPlay: true,
       options: VlcPlayerOptions(
         advanced: VlcAdvancedOptions([
-          VlcAdvancedOptions.networkCaching(300), 
+          VlcAdvancedOptions.networkCaching(1000), // 🔴 زيادة الذاكرة المؤقتة إلى ثانية كاملة
         ]),
       ),
     );
