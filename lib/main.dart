@@ -238,17 +238,18 @@ class _MainScreenState extends State<MainScreen> {
     isHandshakeDone = false; 
     _videoBuffer.clear(); 
 
-    // 💡 استخدام خادم HTTP حقيقي لأنه الأكثر توافقاً مع VLC
+    // 💡 إعداد الخادم المحلي بطريقة نظيفة بدون Chunking ليتوافق مع VLC
     localHttpProxy = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     localHttpProxy!.listen((HttpRequest request) { 
-      request.response.headers.contentType = ContentType('video', 'mp2t'); 
+      request.response.statusCode = HttpStatus.ok;
+      request.response.headers.set('Content-Type', 'video/mp2t'); 
+      request.response.headers.set('Connection', 'close');
       request.response.headers.add('Access-Control-Allow-Origin', '*');
-      request.response.headers.chunkedTransferEncoding = true;
       currentHttpResponse = request.response;
       
       if (_videoBuffer.isNotEmpty) {
         for (var dataChunk in _videoBuffer) {
-          currentHttpResponse!.add(dataChunk);
+          try { currentHttpResponse!.add(dataChunk); } catch (_) {}
         }
         _videoBuffer.clear();
       }
@@ -256,8 +257,7 @@ class _MainScreenState extends State<MainScreen> {
 
     activeSocket!.listen((Uint8List data) {
       if (!isHandshakeDone) {
-        // 💡 الحل السحري: فصل الكلمة النصية عن بيانات الفيديو دون تدميرها
-        int newlineIndex = data.indexOf(10); // رقم 10 هو كود زر الـ Enter (\n)
+        int newlineIndex = data.indexOf(10); 
         if (newlineIndex != -1) {
           String msg = utf8.decode(data.sublist(0, newlineIndex), allowMalformed: true);
           
@@ -267,16 +267,6 @@ class _MainScreenState extends State<MainScreen> {
             sendCommand("SET_SENSITIVITY:$mouseSpeed");
             isHandshakeDone = true;
             
-            // استخلاص ما تبقى من الحزمة (بيانات الفيديو) وتخزينها بأمان!
-            if (newlineIndex + 1 < data.length) {
-              Uint8List videoData = data.sublist(newlineIndex + 1);
-              if (currentHttpResponse != null) {
-                currentHttpResponse!.add(videoData);
-              } else {
-                _videoBuffer.add(videoData);
-              }
-            }
-
             if (mounted) {
               setState(() { 
                 isConnected = true; 
@@ -284,6 +274,15 @@ class _MainScreenState extends State<MainScreen> {
                 _initVlcPlayer(localHttpProxy!.port); 
               });
               updateStatus(type == "USB" ? "status_connected_usb" : "status_connected_wifi", Colors.green);
+            }
+
+            if (newlineIndex + 1 < data.length) {
+              Uint8List videoData = data.sublist(newlineIndex + 1);
+              if (currentHttpResponse != null) {
+                try { currentHttpResponse!.add(videoData); } catch (_) { currentHttpResponse = null; }
+              } else {
+                _videoBuffer.add(videoData);
+              }
             }
           }
         }
@@ -298,7 +297,7 @@ class _MainScreenState extends State<MainScreen> {
             }
           } catch (e) {}
         } else {
-          // ضخ الفيديو مباشرة
+          // ضخ الفيديو بحذر
           if (currentHttpResponse != null) {
             try {
               currentHttpResponse!.add(data);
@@ -307,6 +306,10 @@ class _MainScreenState extends State<MainScreen> {
             }
           } else {
              _videoBuffer.add(data);
+             // 💡 حد أقصى للذاكرة المؤقتة لمنع الشاشة السوداء وتجميد VLC عند تأخر الاتصال
+             if (_videoBuffer.length > 150) {
+               _videoBuffer.removeAt(0);
+             }
           }
         }
       }
@@ -315,17 +318,15 @@ class _MainScreenState extends State<MainScreen> {
 
   void _initVlcPlayer(int port) {
     _vlcViewController?.dispose();
+    // 💡 إضافة .ts في الرابط، وتغيير hwAcc إلى auto لحل مشكلة الشاشة السوداء!
     _vlcViewController = VlcPlayerController.network(
-      'http://127.0.0.1:$port', 
-      hwAcc: HwAcc.full, 
+      'http://127.0.0.1:$port/live.ts', 
+      hwAcc: HwAcc.auto, 
       autoPlay: true,
       options: VlcPlayerOptions(
         advanced: VlcAdvancedOptions([
-          VlcAdvancedOptions.networkCaching(150), 
+          VlcAdvancedOptions.networkCaching(300), 
         ]),
-        extras: [
-          '--demux=ts', 
-        ],
       ),
     );
   }
